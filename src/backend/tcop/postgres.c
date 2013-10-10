@@ -76,6 +76,8 @@
 #include "utils/timestamp.h"
 #include "mb/pg_wchar.h"
 
+#include "gpu/gpu.h"
+
 
 extern char *optarg;
 extern int	optind;
@@ -3872,6 +3874,14 @@ PostgresMain(int argc, char *argv[],
 
 	if (!ignore_till_sync)
 		send_ready_for_query = true;	/* initially, or after error */
+
+	/*
+ 	 * Initialize GPU Device
+ 	 */ 
+
+	struct clContext * gpuContext = (struct clContext*)palloc(sizeof(struct clContext));
+
+	gpuStart(gpuContext);
 
 	/*
 	 * Non-error queries loop here.

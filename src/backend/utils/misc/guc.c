@@ -433,6 +433,7 @@ char	   *pgstat_temp_directory;
 
 char	   *application_name;
 
+
 int			tcp_keepalives_idle;
 int			tcp_keepalives_interval;
 int			tcp_keepalives_count;
