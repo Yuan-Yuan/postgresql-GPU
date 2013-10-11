@@ -827,7 +827,7 @@ pg_plan_queries(List *querytrees, int cursorOptions, ParamListInfo boundParams)
  * Execute a "simple Query" protocol message.
  */
 static void
-exec_simple_query(const char *query_string)
+exec_simple_query(const char *query_string, struct clContext *context)
 {
 	CommandDest dest = whereToSendOutput;
 	MemoryContext oldcontext;
@@ -1008,7 +1008,7 @@ exec_simple_query(const char *query_string)
 		/*
 		 * Start the portal.  No parameters here.
 		 */
-		PortalStart(portal, NULL, 0, InvalidSnapshot);
+		PortalStart(portal, NULL, 0, InvalidSnapshot, context);
 
 		/*
 		 * Select the appropriate output format: text unless we are doing a
@@ -1738,7 +1738,7 @@ exec_bind_message(StringInfo input_message)
 	/*
 	 * And we're ready to start portal execution.
 	 */
-	PortalStart(portal, params, 0, InvalidSnapshot);
+	PortalStart(portal, params, 0, InvalidSnapshot, NULL);
 
 	/*
 	 * Apply the result format requests to the portal.
@@ -3992,7 +3992,7 @@ PostgresMain(int argc, char *argv[],
 					if (am_walsender)
 						exec_replication_command(query_string);
 					else
-						exec_simple_query(query_string);
+						exec_simple_query(query_string, gpuContext);
 
 					send_ready_for_query = true;
 				}
@@ -4234,6 +4234,8 @@ PostgresMain(int argc, char *argv[],
 								firstchar)));
 		}
 	}							/* end of input-reading loop */
+
+	pfree(gpuContext);
 }
 
 /*

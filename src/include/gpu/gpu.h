@@ -9,6 +9,8 @@ struct clContext{
     cl_kernel kernel;
 };
 
-int gpuStart(struct clContext *);
+enum{
+    ONGPU = 1123   /* a random number */
+};
 
 #endif

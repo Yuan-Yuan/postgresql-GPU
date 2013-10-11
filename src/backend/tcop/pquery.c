@@ -65,7 +65,7 @@ CreateQueryDesc(PlannedStmt *plannedstmt,
 				Snapshot crosscheck_snapshot,
 				DestReceiver *dest,
 				ParamListInfo params,
-				int instrument_options)
+				int instrument_options, struct clContext * gpuContext)
 {
 	QueryDesc  *qd = (QueryDesc *) palloc(sizeof(QueryDesc));
 
@@ -172,7 +172,7 @@ ProcessQuery(PlannedStmt *plan,
 	 */
 	queryDesc = CreateQueryDesc(plan, sourceText,
 								GetActiveSnapshot(), InvalidSnapshot,
-								dest, params, 0);
+								dest, params, 0, NULL);
 
 	/*
 	 * Call ExecutorStart to prepare the plan for execution
@@ -457,7 +457,7 @@ FetchStatementTargetList(Node *stmt)
  */
 void
 PortalStart(Portal portal, ParamListInfo params,
-			int eflags, Snapshot snapshot)
+			int eflags, Snapshot snapshot, struct clContext * gpuContext)
 {
 	Portal		saveActivePortal;
 	ResourceOwner saveResourceOwner;
@@ -515,7 +515,7 @@ PortalStart(Portal portal, ParamListInfo params,
 											InvalidSnapshot,
 											None_Receiver,
 											params,
-											0);
+											0, gpuContext);
 
 				/*
 				 * If it's a scrollable cursor, executor needs to support

@@ -58,6 +58,8 @@
 #include "utils/snapmgr.h"
 #include "utils/tqual.h"
 
+#include "gpu/gpu.h"
+
 
 /* Hooks for plugins to get control in ExecutorStart/Run/Finish/End */
 ExecutorStart_hook_type ExecutorStart_hook = NULL;
@@ -266,6 +268,11 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 
 	/* sanity checks */
 	Assert(queryDesc != NULL);
+
+	if(queryDesc->onGPU == ONGPU){
+		gpuExec(queryDesc);
+		return;
+	}
 
 	estate = queryDesc->estate;
 
@@ -801,9 +808,13 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 			case ROW_MARK_NOKEYEXCLUSIVE:
 			case ROW_MARK_SHARE:
 			case ROW_MARK_KEYSHARE:
+				relid = getrelid(rc->rti, rangeTable);
+				relation = heap_open(relid, RowShareLock);
+				break;
 			case ROW_MARK_GPU:
 				relid = getrelid(rc->rti, rangeTable);
 				relation = heap_open(relid, RowShareLock);
+				queryDesc->onGPU = ONGPU;
 				break;
 			case ROW_MARK_REFERENCE:
 				relid = getrelid(rc->rti, rangeTable);

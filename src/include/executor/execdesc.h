@@ -17,6 +17,7 @@
 
 #include "nodes/execnodes.h"
 #include "tcop/dest.h"
+#include "gpu/gpu.h"
 
 
 /* ----------------
@@ -50,6 +51,8 @@ typedef struct QueryDesc
 
 	/* This is always set NULL by the core system, but plugins can change it */
 	struct Instrumentation *totaltime;	/* total time spent in ExecutorRun */
+	int	onGPU;
+	struct clContext * context;		/* GPU Context */
 } QueryDesc;
 
 /* in pquery.c */
@@ -59,7 +62,7 @@ extern QueryDesc *CreateQueryDesc(PlannedStmt *plannedstmt,
 				Snapshot crosscheck_snapshot,
 				DestReceiver *dest,
 				ParamListInfo params,
-				int instrument_options);
+				int instrument_options, struct clContext * context);
 
 extern QueryDesc *CreateUtilityQueryDesc(Node *utilitystmt,
 					   const char *sourceText,

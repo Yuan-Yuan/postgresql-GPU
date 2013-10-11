@@ -2247,6 +2247,9 @@ LCS_asString(LockClauseStrength strength)
 void
 CheckSelectLocking(Query *qry, LockClauseStrength strength)
 {
+	if(strength == LCS_FORGPU)
+		return;
+
 	if (qry->setOperations)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -2315,9 +2318,6 @@ transformLockingClause(ParseState *pstate, Query *qry, LockingClause *lc,
 	ListCell   *rt;
 	Index		i;
 	LockingClause *allrels;
-
-	if(lc->strength == LCS_FORGPU)
-		return;
 
 	CheckSelectLocking(qry, lc->strength);
 
