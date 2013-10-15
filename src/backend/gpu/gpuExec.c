@@ -81,7 +81,9 @@ int gpuExec(QueryDesc * querydesc){
             Buffer buf = ReadBuffer(r,i);
             Page dp = BufferGetPage(buf);
             memcpy((char *)clTmp + offset, dp, BLCKSZ);
+            ReleaseBuffer(buf);
         }
+        RelationClose(r);
     }
 
     /*
