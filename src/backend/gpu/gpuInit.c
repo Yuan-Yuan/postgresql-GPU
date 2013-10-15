@@ -48,15 +48,34 @@ static void deviceInit(struct clContext * context){
     int psc;
     
     clGetPlatformIDs(0, NULL, &numP);
-    if (numP <1)
-        return -1;
+    if (numP <1){
+        printf("Failed to get platform ID\n");
+        return;
+    }
 
     pid = (cl_platform_id*)palloc(numP * sizeof(cl_platform_id));
     clGetPlatformIDs(numP, pid, NULL);
-    clGetDeviceIDs(pid[0], CL_DEVICE_TYPE_CPU, 1,&device, NULL);
+    error = clGetDeviceIDs(pid[0], CL_DEVICE_TYPE_CPU, 1,&device, NULL);
+    if(error != CL_SUCCESS){
+        printf("Failed to get OpenCL device ID %d\n",error);
+    }
+
+    error = clGetDeviceInfo(device,CL_DEVICE_GLOBAL_MEM_SIZE,sizeof(cl_ulong),&(context->gl_mem_size),NULL);
+    if(error != CL_SUCCESS){
+        printf("Failed to get OpenCL device memory size %d\n",error);
+    }
+
+    error = clGetDeviceInfo(device,CL_DEVICE_MAX_MEM_ALLOC_SIZE,sizeof(cl_ulong),&(context->max_alloc_size),NULL);
+    if(error != CL_SUCCESS){
+        printf("Failed to get OpenCL max alloc memory size %d\n",error);
+    }
+
     context->context = clCreateContext(0,1,&device,NULL,NULL,&error);
     prop |= CL_QUEUE_PROFILING_ENABLE;
     context->queue = clCreateCommandQueue(context->context, device, prop,&error);
+    if(error != CL_SUCCESS){
+        printf("Failed to create OpenCL command queue %d\n",error);
+    }
 
     context->ps = createProgram(&psc);
 
@@ -71,6 +90,9 @@ static void deviceInit(struct clContext * context){
     if(error != CL_SUCCESS){
         printf("Failed to build OpenCL program %d\n",error);
     }
+
+    context->table = NULL;
+    context->totalSize = 0;
 
 }
 
@@ -94,10 +116,17 @@ void gpuStart(struct clContext * context){
  */
 
 void gpuStop(struct clContext * context){
-
+    int i = 0;
     assert(context != NULL);
+
+    if(context->table != NULL){
+        for(i = 0;i<context->tableNum;i++){
+            clReleaseMemObject(context->table[i].memory);
+            clReleaseMemObject(context->table[i].gpuMemory);
+        }
+        pfree(context->table);
+    }
     clFinish(context->queue);
-    clReleaseMemObject(context->memory);
     clReleaseCommandQueue(context->queue);
     clReleaseContext(context->context);
     clReleaseProgram(context->program);

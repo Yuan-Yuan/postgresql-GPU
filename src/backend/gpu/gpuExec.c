@@ -17,7 +17,7 @@ int gpuExec(QueryDesc * querydesc){
     EState * estate = querydesc->estate;
     struct clContext * context = querydesc->context;
     ListCell *l;
-    BlockNumber totalBlocks = 0;
+    long totalSize = 0;
     PlanState * outerPlan;
     cl_int error = 0;
     void * clTmp;
@@ -35,33 +35,15 @@ int gpuExec(QueryDesc * querydesc){
      * Calculate the total number of blocks for all relations.
      */ 
 
-    foreach(l, estate->es_rowMarks){
-        ExecRowMark * erm = (ExecRowMark *)lfirst(l);
-        Relation r = erm->relation;
-
-        totalBlocks += RelationGetNumberOfBlocks(r);
-    }
+    context->tableNum = list_length(rangeTable);
+    context->table = palloc(sizeof(struct gpuTable)*context->tableNum);
 
     /*
-     * Calculate the total size of the needed memory.
+     * Calculate the total size of each table.
      * Allocate the needed memory using CL_MEM_ALLOC_HOST_PTR flag.
      * Very inefficient here.
+     * Copy the data to the opencl managed memory (on the host side).
      */
-
-    context->size = totalBlocks * BLCKSZ;
-    context->memory = (char *)clCreateBuffer(context->context, CL_MEM_READ_ONLY|CL_MEM_ALLOC_HOST_PTR, context->size,NULL,&error);
-    if(error != CL_SUCCESS){
-        printf("Failed to allocate opencl memory with size:%ld\n",context->size);
-    }
-
-    /*
-     * Copy all the table data into OpenCl memory.
-     */ 
-
-    clTmp = clEnqueueMapBuffer(context->queue,(cl_mem)context->memory,CL_TRUE,CL_MAP_WRITE,0,context->size,0,0,0,&error);
-    if(error != CL_SUCCESS){
-        printf("Failed to map OpenCL memory\n");
-    }
 
     foreach(l, rangeTable){
         RangeTblEntry * rt = (RangeTblEntry *)lfirst(l);
@@ -71,24 +53,60 @@ int gpuExec(QueryDesc * querydesc){
         /*
          * Only support simple scan operation. More complexed operation will be supported later.
          */ 
+
         assert(rt->rtekind == RTE_RELATION);
+
+        context->table[offset].size = bln* BLCKSZ;
+        context->table[offset].memory = (char*)clCreateBuffer(context->context,CL_MEM_READ_ONLY|CL_MEM_ALLOC_HOST_PTR, context->table[offset].size, NULL, &error);
+
+        if(error != CL_SUCCESS){
+            printf("Failed tot allocate opencl memory with size :%ld\n",context->table[offset].size);
+        }
+
+        clTmp = clEnqueueMapBuffer(context->queue,(cl_mem)context->table[offset].memory,CL_TRUE,CL_MAP_WRITE,0,context->table[offset].size,0,0,0,&error);
+        if(error != CL_SUCCESS){
+            printf("Failed to map opencl memory\n");
+        }
 
         /*
          * The relation must have been opened with lock already.
          * Here we simply get Relation for the relation id.
          */
-        for(i=0;i<bln;i++, offset += BLCKSZ){
+        for(i=0;i<bln;i++){
             Buffer buf = ReadBuffer(r,i);
             Page dp = BufferGetPage(buf);
-            memcpy((char *)clTmp + offset, dp, BLCKSZ);
+            memcpy((char *)clTmp + i*BLCKSZ, dp, BLCKSZ);
             ReleaseBuffer(buf);
         }
         RelationClose(r);
+        clEnqueueUnmapMemObject(context->queue,(cl_mem)context->table[offset].memory,clTmp,0,0,0);
+
+        totalSize += context->table[offset].size;
+        offset += 1;
+    }
+    context->totalSize = totalSize;
+
+    /*
+     * The data will be transferred from OpenCL managed memory to GPU.
+     */
+
+    for(i=0;i<context->tableNum;i++){
+        struct gpuTable  table = context->table[i];
+        if(table.size > context->max_alloc_size){
+            printf("Not supported yet: table size is larger than the max supported allcoate size\n");
+            table.gpuMemory = clCreateBuffer(context->context, CL_MEM_READ_ONLY, table.size, NULL, &error);
+            if(error != CL_SUCCESS){
+                printf("Failed to allocate memory on GPU device\n");
+            }
+
+            clEnqueueCopyBuffer(context->queue,(cl_mem)table.memory,table.gpuMemory,0,0,table.size,0,0,0);
+        }
     }
 
     /*
-     * The data will be transferred from OpenCL memory to GPU and query will be executed on GPU.
-     */
+     * Execute the query on GPU.
+     */ 
+    
 
     printf("This part will be executed on OpenCL supported device\n");
     return 0;

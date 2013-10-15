@@ -2,6 +2,18 @@
 #define POSTGRES_GPU_H
 #include <CL/cl.h>
 
+/*
+ * GPU table related info.
+ */
+
+struct gpuTable{
+    long size;      /* Total table size */
+    int colNum;     /* Number of columns in the table */
+
+    char * memory;   /* host pinned memory to hold all table data (row-store) */
+    char * gpuMemory; /* GPU memory to hold all the table data */
+};
+
 struct clContext{
     /*
      * OpenCL related parameters
@@ -13,11 +25,19 @@ struct clContext{
     const char * ps;            /* pointing to the memory space allocated for OpenCL kernel file */
 
     /*
-     * OpenCL memory related parameters
+     * Device related info.
+     */ 
+
+    cl_ulong gl_mem_size;
+    cl_ulong max_alloc_size;
+
+    /*
+     * OpenCL table related parameters. 
      */
 
-    char *  memory;     /* pointing to the allocated memory space */
-    long size;          /* the total size of the memory*/
+    struct gpuTable * table;    /* The table data */
+    int tableNum;               /* Number of tables */
+    long totalSize;             /* the total size of all the table data */
 };
 
 enum{
