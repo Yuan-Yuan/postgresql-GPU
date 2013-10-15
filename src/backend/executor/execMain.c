@@ -457,6 +457,10 @@ standard_ExecutorEnd(QueryDesc *queryDesc)
 	FreeExecutorState(estate);
 
 	/* Reset queryDesc fields that no longer point to anything */
+	if(queryDesc->onGPU == ONGPU){
+		gpuStop(queryDesc->context);
+		queryDesc->context = NULL;
+	}
 	queryDesc->tupDesc = NULL;
 	queryDesc->estate = NULL;
 	queryDesc->planstate = NULL;
@@ -815,6 +819,8 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 				relid = getrelid(rc->rti, rangeTable);
 				relation = heap_open(relid, RowShareLock);
 				queryDesc->onGPU = ONGPU;
+				queryDesc->context = (struct clContext *)palloc(sizeof(struct clContext)); 
+				gpuStart(queryDesc->context);
 				break;
 			case ROW_MARK_REFERENCE:
 				relid = getrelid(rc->rti, rangeTable);

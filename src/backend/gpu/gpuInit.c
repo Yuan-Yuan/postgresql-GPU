@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <assert.h>
 
 #include "postgres.h"
 #include "gpu/gpu.h"
@@ -23,7 +24,10 @@ static const char * createProgram(int *num){
         printf("Failed to open OpenCL kernel file\n");
     }
 
-    fsize = fseek(fp, SEEK_END, 0);
+    *num = 1;
+    fseek(fp, 0, SEEK_END);
+    fsize = ftell(fp);
+    fseek(fp,0,SEEK_SET);
 
     res = palloc(fsize+1);
     memset(res, 0, fsize + 1);
@@ -42,7 +46,6 @@ static void deviceInit(struct clContext * context){
     cl_device_id device;
     cl_command_queue_properties prop = 0;
     int psc;
-    const char * ps;
     
     clGetPlatformIDs(0, NULL, &numP);
     if (numP <1)
@@ -55,25 +58,27 @@ static void deviceInit(struct clContext * context){
     prop |= CL_QUEUE_PROFILING_ENABLE;
     context->queue = clCreateCommandQueue(context->context, device, prop,&error);
 
-    ps = createProgram(&psc);
+    context->ps = createProgram(&psc);
 
-    context->program = clCreateProgramWithSource(context->context,psc,(const char**)&ps, 0 , &error);
+    context->program = clCreateProgramWithSource(context->context,psc,(const char**)&(context->ps), 0 , &error);
 
     if(error != CL_SUCCESS){
-        printf("Failed to create OpenCL program\n");
+        printf("Failed to create OpenCL program %d\n",error);
     }
 
     error = clBuildProgram(context->program, 0,0, "-I .", 0, 0);
 
     if(error != CL_SUCCESS){
-        printf("Failed to build OpenCL program\n");
+        printf("Failed to build OpenCL program %d\n",error);
     }
 
 }
 
-int gpuStart(struct clContext * context){
+/*
+ * @gpuStart: must be called before offloading query to GPU.
+ */
 
-    int res = 0;
+void gpuStart(struct clContext * context){
 
     /*
      * Intialize GPU devices.
@@ -82,5 +87,19 @@ int gpuStart(struct clContext * context){
      */ 
 
     deviceInit(context);
-    return 0;
+}
+
+/*
+ * @gpuStop: release OpenCL context. Called when query ends.
+ */
+
+void gpuStop(struct clContext * context){
+
+    assert(context != NULL);
+    clFinish(context->queue);
+    clReleaseMemObject(context->memory);
+    clReleaseCommandQueue(context->queue);
+    clReleaseContext(context->context);
+    clReleaseProgram(context->program);
+    pfree(context->ps);
 }

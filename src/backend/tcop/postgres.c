@@ -76,8 +76,6 @@
 #include "utils/timestamp.h"
 #include "mb/pg_wchar.h"
 
-#include "gpu/gpu.h"
-
 
 extern char *optarg;
 extern int	optind;
@@ -1008,7 +1006,7 @@ exec_simple_query(const char *query_string, struct clContext *context)
 		/*
 		 * Start the portal.  No parameters here.
 		 */
-		PortalStart(portal, NULL, 0, InvalidSnapshot, context);
+		PortalStart(portal, NULL, 0, InvalidSnapshot, NULL);
 
 		/*
 		 * Select the appropriate output format: text unless we are doing a
@@ -3876,14 +3874,6 @@ PostgresMain(int argc, char *argv[],
 		send_ready_for_query = true;	/* initially, or after error */
 
 	/*
- 	 * Initialize GPU Device
- 	 */ 
-
-	struct clContext * gpuContext = (struct clContext*)palloc(sizeof(struct clContext));
-
-	gpuStart(gpuContext);
-
-	/*
 	 * Non-error queries loop here.
 	 */
 
@@ -3992,7 +3982,7 @@ PostgresMain(int argc, char *argv[],
 					if (am_walsender)
 						exec_replication_command(query_string);
 					else
-						exec_simple_query(query_string, gpuContext);
+						exec_simple_query(query_string, NULL);
 
 					send_ready_for_query = true;
 				}
@@ -4235,7 +4225,6 @@ PostgresMain(int argc, char *argv[],
 		}
 	}							/* end of input-reading loop */
 
-	pfree(gpuContext);
 }
 
 /*

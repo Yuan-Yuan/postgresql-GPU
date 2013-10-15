@@ -5,7 +5,21 @@ Some notes on current implementation (will be updated based on the process):
 2. Query parser and optimizer are mostly unaware of the existing of OpenCL devices.
 If the query will be executed on GPU, only sequential can plan will be generated for regular table node.
 3. Currently only scan operation is supported. Other operations will be supported later.
+4. For each query that will be executed on GPU, we will create a OpenCL context.
+(Alternative choice: we can also create on OpenCL context for each postgres process)
+5. OpenCL memory management:
+    1) total memory size
+    For each query, we will allocate a special memory space to accomodate all the query needed data before
+    transferred to GPU. Currently the size of the allocated memory for each query equals to the total size
+    of data needed by the query (very inefficient).
+    2) how to allocate memory
+    Memory are allocated using CL_MEM_ALLOC_HOST_PTR. The place where the memory are allocated depends on
+    OpenCL driver implementation (Intel and AMD in pinned host memory which Nvidia in GPU device memory).
+    3) when to release
+    all the opencl allocated memory will be released when query ends(ExecutorEnd())
 
 Modified files:
 Optimizer (only generating seq scan plan for regular table node):
     src/backend/optimizer/path/allpaths.c: set_plain_rel_pathlist()
+    src/backend/executor/execMain.c: ExecutorStart(), ExecutorRun(): setup OpenCL context, offload to GPU
+    (Alternative choice: src/backend/tcop/postgres.c: PostgresMain: setup OpenCL context and intialize query description with it)
