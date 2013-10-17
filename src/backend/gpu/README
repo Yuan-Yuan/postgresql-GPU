@@ -17,6 +17,7 @@ If the query will be executed on GPU, only sequential can plan will be generated
     OpenCL driver implementation (Intel and AMD in pinned host memory which Nvidia in GPU device memory).
     3) when to release
     all the opencl allocated memory will be released when query ends(ExecutorEnd())
+6. We first assume that the output of a query only consists of simple attributes. Complex expressions will be supported later.
 
 Modified files:
 Optimizer (only generating seq scan plan for regular table node):

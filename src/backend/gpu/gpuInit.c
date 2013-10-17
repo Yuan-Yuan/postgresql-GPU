@@ -5,6 +5,7 @@
 #include <assert.h>
 
 #include "postgres.h"
+#include "executor/executor.h"
 #include "gpu/gpu.h"
 
 /*
@@ -100,7 +101,7 @@ static void deviceInit(struct clContext * context){
  * @gpuStart: must be called before offloading query to GPU.
  */
 
-void gpuStart(struct clContext * context){
+void gpuStart(QueryDesc * querydesc){
 
     /*
      * Intialize GPU devices.
@@ -108,7 +109,7 @@ void gpuStart(struct clContext * context){
      * It May be an OpenCL-supported CPU.
      */ 
 
-    deviceInit(context);
+    deviceInit(querydesc->context);
 }
 
 /*

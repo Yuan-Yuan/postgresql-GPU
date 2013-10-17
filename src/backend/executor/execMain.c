@@ -820,7 +820,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 				relation = heap_open(relid, RowShareLock);
 				queryDesc->onGPU = ONGPU;
 				queryDesc->context = (struct clContext *)palloc(sizeof(struct clContext)); 
-				gpuStart(queryDesc->context);
+				gpuStart(queryDesc);
 				break;
 			case ROW_MARK_REFERENCE:
 				relid = getrelid(rc->rti, rangeTable);
