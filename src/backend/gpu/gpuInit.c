@@ -14,6 +14,10 @@
 
 static char * kernelPath = "../share/postgresql/kernel.cl";
 
+
+/*
+ * CreateProgram: load the OpenCL kernel file.
+ */
 static const char * createProgram(int *num){
     char * res;
     FILE *fp;
@@ -39,6 +43,10 @@ static const char * createProgram(int *num){
 
     return res;
 }
+
+/*
+ * deviceInit: create OpenCL context.
+ */
 
 static void deviceInit(struct clContext * context){
     cl_uint numP;
@@ -98,6 +106,177 @@ static void deviceInit(struct clContext * context){
 }
 
 /*
+ * gpuExprInit: initialize an expression which will be evaluted on GPU.
+ */
+
+static void gpuExprInit(Expr *cpuExpr, struct gpuTargetEntry *gpuEntry){
+
+    switch(nodeTag(cpuExpr)){
+        case T_Var:
+            {
+                Var * var = (Var *)cpuExpr;
+                printf("Expression Type T_Var\n");
+                break;
+            }
+
+        case T_Const:
+            {
+                Const * expr = (OpExpr *)cpuExpr;
+                printf("Expression type T_Const\n");
+                break;
+            }
+        case T_OpExpr:
+            {
+                OpExpr *expr = (OpExpr *)cpuExpr;
+                printf("Expression type T_OpExpr\n");
+                break;
+            }
+
+        default:
+            printf("Expression type not supported yet %d\n", nodeTag(cpuExpr));
+            break;
+    }
+}
+
+/*
+ * gpuInitScan: initialize gpu Scan node.
+ *  1) initialize target list
+ *  2) initialize where condition
+ *
+ * Input:
+ *    @planstate: query node state from postgresql
+ *
+ * Return:
+ *    A new gpuScanNode.
+ */
+
+static struct gpuScanNode* gpuInitScan(PlanState *planstate){
+
+    struct gpuScanNode *scannode = NULL;
+    ScanState * scanstate = (ScanState *)planstate;
+    ProjectionInfo *pi = scanstate->ps.ps_ProjInfo;
+    struct gpuTargetEntry *targetlist = NULL;
+    ListCell *l;
+    int i;
+
+    scannode = (struct gpuScanNode*)palloc(sizeof(struct gpuScanNode));
+    scannode->plan.type = GPU_SCAN;
+    scannode->plan.colNum = (list_length(pi->pi_targetlist) - 1) + pi->pi_numSimpleVars; 
+    targetlist = (struct gpuTargetEntry *) palloc(sizeof(struct gpuTargetEntry*) * scannode->plan.colNum);
+    scannode->plan.leftPlan = NULL;
+    scannode->plan.rightPlan = NULL;
+
+    /* 
+     * Initialize scannode target list.
+     * The last entry in the targetlist is a junk entry.
+     * The length of the projected list is caculated as:
+     *      number of simple attributes + number of expressions.
+     * resno attribute in each target entry indicates the position in the projected list.
+     */
+
+    foreach(l, pi->pi_targetlist){
+        GenericExprState * gestate = (GenericExprState *) lfirst(l);
+        TargetEntry * te = (TargetEntry *) gestate->xprstate.expr;
+        if(nodeTag(te->expr) == T_Var){
+        /*
+         * This means this is a junk entry. 
+         */
+            continue;
+        }
+
+    }
+
+    for(i = 0;i<pi->pi_numSimpleVars;i++){
+
+    }
+
+    scannode->plan.targetlist = targetlist; 
+
+    /* TBD: initialize scan node where condition */
+
+    return scannode;
+}
+
+/*
+ * gpuInitPlan: initialize gpu query plan.
+ */
+
+static struct gpuPlan * gpuInitPlan(PlanState *planstate){
+
+    struct gpuPlan * result = NULL;
+
+    switch(nodeTag(planstate)){
+        case T_SeqScanState:
+            {
+                result = (struct gpuPlan*) gpuInitScan(planstate);
+                printf("Initialize gpu scan: finished\n");
+                break;
+            }
+
+        default:
+            printf("Query node type not supported yet:%d\n",nodeTag(planstate));
+            break;
+    }
+
+    return result;
+}
+
+/*
+ * gpuInitSnapshot: initialize the snapshot data on GPU.
+ *
+ * intput:
+ *  @gpuSp: the GPU snapshot data to be initialized.
+ *  @cpuSp: the CPU snapshot data.
+ */
+
+static void gpuInitSnapshot(struct gpuSnapshot *gpuSp, Snapshot cpuSp){
+    int i = 0;
+
+    gpuSp->xmin = cpuSp->xmin;
+    gpuSp->xmax = cpuSp->xmax;
+    gpuSp->xcid = cpuSp->curcid;
+    gpuSp->xcnt = cpuSp->xcnt;
+    gpuSp->xip = (int *)palloc(sizeof(int)*gpuSp->xcnt);
+    for(i=0;i<gpuSp->xcnt;i++){
+        gpuSp->xip = cpuSp->xip[i];
+    }
+}
+
+/*
+ * Free the space of the gpu snapshot.
+ */
+
+static void gpuFreeSnapshot(struct gpuSnapshot *gpuSp){
+    pfree(gpuSp->xip);
+}
+
+static void gpuQueryPlanInit(QueryDesc * querydesc){
+
+    PlannedStmt *plannedstmt = querydesc->plannedstmt;
+    PlanState *outerPlan = outerPlanState(querydesc->planstate);
+    struct gpuQueryDesc *gpuQuery;
+
+    assert(nodeTag(querydesc->planstate) == T_LockRowsState);
+
+    gpuQuery = (struct gpuQueryDesc *)palloc(sizeof(struct gpuQueryDesc));
+
+    /*
+     * First step: copy snapshot related data from CPU query description.
+     */
+    gpuInitSnapshot(&(gpuQuery->snapshot), querydesc->snapshot);
+
+    /*
+     * Second step: initialize the query plan.
+     */ 
+    gpuQuery->plan = gpuInitPlan(outerPlan);
+
+}
+
+static void gpuQueryPlanFinish(struct clContext * context){
+
+}
+
+/*
  * @gpuStart: must be called before offloading query to GPU.
  */
 
@@ -110,6 +289,13 @@ void gpuStart(QueryDesc * querydesc){
      */ 
 
     deviceInit(querydesc->context);
+
+    /*
+     * Initialize the query plan on GPU.
+     * The query plan no GPU is not as complex as it is on CPU.
+     */
+
+    gpuQueryPlanInit(querydesc);
 }
 
 /*
@@ -119,6 +305,7 @@ void gpuStart(QueryDesc * querydesc){
 void gpuStop(struct clContext * context){
     int i = 0;
     assert(context != NULL);
+    return ;
 
     if(context->table != NULL){
         for(i = 0;i<context->tableNum;i++){
@@ -127,6 +314,7 @@ void gpuStop(struct clContext * context){
         }
         pfree(context->table);
     }
+
     clFinish(context->queue);
     clReleaseCommandQueue(context->queue);
     clReleaseContext(context->context);

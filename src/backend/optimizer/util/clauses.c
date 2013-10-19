@@ -2242,6 +2242,7 @@ eval_const_expressions_mutator(Node *node,
 {
 	if (node == NULL)
 		return NULL;
+
 	switch (nodeTag(node))
 	{
 		case T_Param:

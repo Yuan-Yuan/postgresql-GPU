@@ -115,6 +115,7 @@ ExecScan(ScanState *node,
 	ExprDoneCond isDone;
 	TupleTableSlot *resultSlot;
 
+
 	/*
 	 * Fetch data from node
 	 */

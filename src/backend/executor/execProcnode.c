@@ -358,8 +358,10 @@ ExecProcNode(PlanState *node)
 
 	CHECK_FOR_INTERRUPTS();
 
-	if (node->chgParam != NULL) /* something changed */
+
+	if (node->chgParam != NULL) /* something changed */{
 		ExecReScan(node);		/* let ReScan handle this */
+	}
 
 	if (node->instrument)
 		InstrStartNode(node->instrument);

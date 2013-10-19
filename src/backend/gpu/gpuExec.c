@@ -31,6 +31,9 @@ int gpuExec(QueryDesc * querydesc){
 
     outerPlan = outerPlanState(querydesc->planstate);
 
+    printf("xxx %d\n", list_length(outerPlan->ps_ProjInfo->pi_targetlist));
+    return 0;
+
     /*
      * Calculate the total number of blocks for all relations.
      */ 
@@ -106,7 +109,6 @@ int gpuExec(QueryDesc * querydesc){
     /*
      * Execute the query on GPU.
      */ 
-    
 
     printf("This part will be executed on OpenCL supported device\n");
     return 0;
