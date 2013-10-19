@@ -6,6 +6,7 @@
 
 #include "postgres.h"
 #include "executor/executor.h"
+#include "utils/rel.h"
 #include "gpu/gpu.h"
 
 /*
@@ -121,7 +122,7 @@ static void gpuExprInit(Expr *cpuExpr, struct gpuTargetEntry *gpuEntry){
 
         case T_Const:
             {
-                Const * expr = (OpExpr *)cpuExpr;
+                Const * expr = (Const *)cpuExpr;
                 printf("Expression type T_Const\n");
                 break;
             }
@@ -165,6 +166,8 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
     targetlist = (struct gpuTargetEntry *) palloc(sizeof(struct gpuTargetEntry*) * scannode->plan.colNum);
     scannode->plan.leftPlan = NULL;
     scannode->plan.rightPlan = NULL;
+
+    scannode->table.tid = RelationGetRelid(scanstate->ss_currentRelation);
 
     /* 
      * Initialize scannode target list.
@@ -238,7 +241,7 @@ static void gpuInitSnapshot(struct gpuSnapshot *gpuSp, Snapshot cpuSp){
     gpuSp->xcnt = cpuSp->xcnt;
     gpuSp->xip = (int *)palloc(sizeof(int)*gpuSp->xcnt);
     for(i=0;i<gpuSp->xcnt;i++){
-        gpuSp->xip = cpuSp->xip[i];
+        gpuSp->xip[i] = cpuSp->xip[i];
     }
 }
 
@@ -252,7 +255,6 @@ static void gpuFreeSnapshot(struct gpuSnapshot *gpuSp){
 
 static void gpuQueryPlanInit(QueryDesc * querydesc){
 
-    PlannedStmt *plannedstmt = querydesc->plannedstmt;
     PlanState *outerPlan = outerPlanState(querydesc->planstate);
     struct gpuQueryDesc *gpuQuery;
 

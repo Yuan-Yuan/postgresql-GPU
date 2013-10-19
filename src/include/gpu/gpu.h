@@ -12,13 +12,15 @@ struct gpuTable{
      * Table meta data will be initialized in query execution step.
      */ 
 
-    long blockNum;  	/* Number of blocks in the table */
-    int colNum;     	/* Number of columns in the table */
-    int *colType;   	/* Type of each column */
-    int *colSize;   	/* Size of each column */
+    int tid;          /* relation id to find the table data */
 
-    cl_mem memory;   	/* host pinned memory to hold all table data (row-store) */
-    cl_mem gpuMemory; 	/* GPU memory to hold all the table data */
+    long blockNum;      /* Number of blocks in the table */
+    int colNum;         /* Number of columns in the table */
+    int *colType;       /* Type of each column */
+    int *colSize;       /* Size of each column */
+
+    cl_mem memory;      /* host pinned memory to hold all table data (row-store) */
+    cl_mem gpuMemory;   /* GPU memory to hold all the table data */
 };
 
 /*
