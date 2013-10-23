@@ -25,6 +25,12 @@ Some notes on current implementation (will be updated based on the process):
         4) T_Aggref, agggreation expression.
         5) T_TargetEntry, a target in the target list
 
+7. where condition:
+    currently we only consider simple expressions connected by "and" "or"
+    funcExpr is not supported.
+    variable length data is not handled yet (backend/utils/adt/datum.c).
+
+
 Modified files:
 Optimizer (only generating seq scan plan for regular table node):
     src/backend/optimizer/path/allpaths.c: set_plain_rel_pathlist()

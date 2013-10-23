@@ -269,11 +269,6 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	/* sanity checks */
 	Assert(queryDesc != NULL);
 
-	if(queryDesc->onGPU == ONGPU){
-		gpuExec(queryDesc);
-		return;
-	}
-
 	estate = queryDesc->estate;
 
 	Assert(estate != NULL);
@@ -283,6 +278,11 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	 * Switch into per-query memory context
 	 */
 	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
+
+	if(queryDesc->onGPU == ONGPU){
+		gpuExec(queryDesc);
+		return;
+	}
 
 	/* Allow instrumentation of Executor overall runtime */
 	if (queryDesc->totaltime)

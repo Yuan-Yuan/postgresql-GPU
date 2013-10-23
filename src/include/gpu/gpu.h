@@ -45,28 +45,36 @@ struct gpuVar{
 
 struct gpuConst{
     struct gpuExpr expr;    /* the general expression */
-    int dataType;           /* type of the const */
+    int type;           /* type of the const */
     int length;             /* legnth of the const */
     char *value;            /* point to the memory space where the const value is stored */
+};
+
+struct gpuBoolExpr{
+    struct gpuExpr expr;        /* the general expression */
+    int opType;                 /* and , or */
+
+    int argNum;                 /* Number of bool expressions */
+
+    struct gpuExpr ** args;     /* arguments */
 };
 
 /*
  * gpuOpExp: an expression in the output.
  */
 
-struct gpuOpExp{
+struct gpuOpExpr{
     struct gpuExpr expr;        /* the general expression */
     int opType;                 /* the operation type */
 
-    struct gpuOpExp *left;      /* the first operand */
-    struct gpuOpExp *right;     /* the second operand */
+    struct gpuExpr *left;      /* the first operand */
+    struct gpuExpr *right;     /* the second operand */
 };
 
 struct gpuTargetEntry{
     struct gpuExpr * expr;      /* the expression tree */
     int length;                 /* length of this entry */
     int type;                   /* type of this entry */
-    char *value;                /* value of the evaluted expr */
 };
 
 /*
@@ -91,6 +99,8 @@ struct gpuPlan{
 
     int colNum;
     struct gpuTargetEntry * targetlist;     /* all the projected results */
+    int whereNum;                           /* length of where expression list */
+    struct gpuExpr **whereexpr;             /* for where conditions */
     struct gpuPlan *leftPlan;               /* Point to the child plan or the left child plan */
     struct gpuPlan *rightPlan;              /* Point to the right child plan */
 };
@@ -130,10 +140,7 @@ struct clContext{
      * OpenCL query related parameters.
      */
 
-    struct gpuTable * table;            /* The table data */
     struct gpuQueryDesc * querydesc;    /* Query execution plan on GPU */
-    int tableNum;                       /* Number of tables */
-    long totalSize;                     /* the total size of all the table data */
 };
 
 enum{
@@ -155,9 +162,17 @@ enum{
     GPU_MINUS,
     GPU_MULTIPLY,
     GPU_DIVIDE,
+    GPU_AND,
+    GPU_OR,
+    GPU_NOT,
+    GPU_GT,
+    GPU_GEQ,
+    GPU_EQ,
+    GPU_LT,
+    GPU_LEQ,
 
     /* Node type in the expression tree */
-    GPU_OPEXP = 5000,
+    GPU_OPEXPR = 5000,
     GPU_CONST,
     GPU_VAR,
     GPU_AGGREF,
