@@ -8,8 +8,13 @@
 #include "executor/executor.h"
 #include "utils/rel.h"
 #include "utils/lsyscache.h"
+#include "utils/datum.h"
 #include "catalog/pg_type.h"
 #include "gpu/gpu.h"
+
+
+static struct gpuExpr* gpuExprInit(Expr *);
+static struct gpuExpr** gpuWhere(Expr *);
 
 /*
  * The current dir is datadir, and the kernel file is located in sharedir.
@@ -104,31 +109,159 @@ static void deviceInit(struct clContext * context){
     }
 
 }
+/*
+ * Convert postgresql type to supported gpu type.
+ */
+
+static int pgtypeToGPUType(int typid){
+
+    int gputype = -1;
+
+    switch(typid){
+
+        case INT4OID:
+            gputype = GPU_INT;
+            break;
+
+        case NUMERICOID:
+            gputype = GPU_DECIMAL;
+            break;
+
+        case TEXTOID:
+            gputype = GPU_STRING;
+            break;
+
+        default:
+            printf("Const type not supported yet\n");
+    }
+
+    return gputype;
+}
+
+/*
+ * Initialize Var expression.
+ */
+
+static void gpuInitVarExpr(struct gpuVar *gpuvar, Var * var){
+    gpuvar->expr.type = GPU_VAR;
+    gpuvar->index = var->varattno - 1;
+
+    assert(gpuvar->index >= 0);
+
+    printf("Expression type T_Var\n");
+}
+
+
+/*
+ * Initialize const expression.
+ */
+
+static void gpuInitConstExpr(struct gpuConst *gpuconst, Const * cpuconst){
+
+    gpuconst->type = pgtypeToGPUType(cpuconst->consttype);
+    gpuconst->expr.type = GPU_CONST;
+    gpuconst->length = cpuconst->constlen;
+
+    if(cpuconst->constbyval){
+        gpuconst->value = (char *) palloc(gpuconst->length);
+        memcpy(gpuconst->value, &(cpuconst->constvalue), gpuconst->length);
+
+    }else{
+
+        /* FIXME: how to handle variable length data */
+
+        if(gpuconst->length == -1){
+            gpuconst->length = datumGetSize(cpuconst->constvalue,false, -1);
+        }
+        gpuconst->value = (char*)palloc(gpuconst->length);
+        memcpy(gpuconst->value, DatumGetPointer(cpuconst->constvalue), gpuconst->length);
+    }
+
+    printf("Expression type T_Const\n");
+
+}
+
+/*
+ * Initialize gpuOpExpr.
+ */
+
+static void gpuInitOpExpr(struct gpuOpExpr * gpuopexpr, OpExpr *opexpr){
+
+    char *opname = get_opname(opexpr->opno);
+    ListCell *l;
+
+    /* Currently we only support binary operators */
+
+    assert(list_length(opexpr->args)== 2);
+
+    if(strcmp(opname, "=") == 0){
+        gpuopexpr->opType = GPU_GT;
+    }else if (strcmp(opname,">=")){
+        gpuopexpr->opType = GPU_GEQ;
+    }else if (strcmp(opname,">")){
+        gpuopexpr->opType = GPU_EQ;
+    }else if (strcmp(opname,"<=")){
+        gpuopexpr->opType = GPU_LEQ;
+    }else if (strcmp(opname,"<")){
+        gpuopexpr->opType = GPU_LT;
+    }else if (strcmp(opname,"+")){
+        gpuopexpr->opType = GPU_ADD;
+    }else if (strcmp(opname,"-")){
+        gpuopexpr->opType = GPU_MINUS;
+    }else if (strcmp(opname,"*")){
+        gpuopexpr->opType = GPU_MULTIPLY;
+    }else if (strcmp(opname,"/")){
+        gpuopexpr->opType = GPU_DIVIDE;
+    }
+
+    l = list_head(opexpr->args);
+    gpuopexpr->left = gpuExprInit((Expr*)lfirst(l));
+
+    l = l->next;
+    gpuopexpr->right = gpuExprInit((Expr*)lfirst(l));
+    gpuopexpr->expr.type = GPU_OPEXPR;
+
+    printf("Expression type T_OpExpr\n");
+
+}
 
 /*
  * gpuExprInit: initialize an expression which will be evaluted on GPU.
  */
 
-static void gpuExprInit(Expr *cpuExpr, struct gpuTargetEntry *gpuEntry){
+static struct gpuExpr* gpuExprInit(Expr *cpuExpr){
+
+    struct gpuExpr * gpuexpr = NULL;
 
     switch(nodeTag(cpuExpr)){
         case T_Var:
             {
                 Var * var = (Var *)cpuExpr;
-                printf("Expression Type T_Var\n");
+                struct gpuVar * gpuvar = (struct gpuVar*)palloc(sizeof(struct gpuVar));
+                gpuInitVarExpr(gpuvar, var);
+
+                gpuexpr = (struct gpuExpr *)gpuvar;
                 break;
             }
 
         case T_Const:
             {
-                Const * expr = (Const *)cpuExpr;
-                printf("Expression type T_Const\n");
+                Const * cpuconst = (Const *)cpuExpr;
+                struct gpuConst *gpuconst = (struct gpuConst*)palloc(sizeof(struct gpuConst));
+
+                gpuInitConstExpr(gpuconst, cpuconst);
+                gpuexpr = (struct gpuExpr *)gpuconst;
+
                 break;
             }
         case T_OpExpr:
             {
-                OpExpr *expr = (OpExpr *)cpuExpr;
-                printf("Expression type T_OpExpr\n");
+                OpExpr *opexpr = (OpExpr *)cpuExpr;
+                struct gpuOpExpr * gpuopexpr = (struct gpuOpExpr*)palloc(sizeof(struct gpuOpExpr));
+
+                gpuInitOpExpr(gpuopexpr,opexpr);
+
+                gpuexpr = (struct gpuExpr *)gpuopexpr;
                 break;
             }
 
@@ -136,6 +269,8 @@ static void gpuExprInit(Expr *cpuExpr, struct gpuTargetEntry *gpuEntry){
             printf("Expression type not supported yet %d\n", nodeTag(cpuExpr));
             break;
     }
+
+    return gpuexpr;
 }
 
 /*
@@ -207,38 +342,8 @@ static struct gpuExpr ** gpuWhere(Expr * expr){
             {
                 struct gpuOpExpr *gpuopexpr = (struct gpuOpExpr *)palloc(sizeof(struct gpuOpExpr));
                 OpExpr   *opexpr = (OpExpr *) expr;
-                char *opname = get_opname(opexpr->opno);
 
-                /* Currently we only support binary operators */
-                assert(list_length(opexpr->args)== 2);
-
-                if(strcmp(opname, ">") == 0){
-                    gpuopexpr->opType = GPU_GT;
-                }else if (strcmp(opname,">=")){
-                    gpuopexpr->opType = GPU_GEQ;
-                }else if (strcmp(opname,"=")){
-                    gpuopexpr->opType = GPU_EQ;
-                }else if (strcmp(opname,"<=")){
-                    gpuopexpr->opType = GPU_LEQ;
-                }else if (strcmp(opname,"<")){
-                    gpuopexpr->opType = GPU_LT;
-                }else if (strcmp(opname,"+")){
-                    gpuopexpr->opType = GPU_ADD;
-                }else if (strcmp(opname,"-")){
-                    gpuopexpr->opType = GPU_MINUS;
-                }else if (strcmp(opname,"*")){
-                    gpuopexpr->opType = GPU_MULTIPLY;
-                }else if (strcmp(opname,"/")){
-                    gpuopexpr->opType = GPU_DIVIDE;
-                }
-
-                l = list_head(opexpr->args);
-                gpuopexpr->left = *gpuWhere((Expr*)lfirst(l));
-
-                l = l->next;
-                gpuopexpr->right = *gpuWhere((Expr*)lfirst(l));
-
-                gpuopexpr->expr.type = GPU_OPEXPR;
+                gpuInitOpExpr(gpuopexpr, opexpr);
 
                 gpuexpr = (struct gpuExpr **)&gpuopexpr;
                 break;
@@ -249,8 +354,7 @@ static struct gpuExpr ** gpuWhere(Expr * expr){
                 struct gpuVar *gpuvar = (struct gpuVar*)palloc(sizeof(struct gpuVar));
                 Var * var = (Var*) expr;
 
-                gpuvar->expr.type = GPU_VAR;
-                gpuvar->index = var->varattno - 1;
+                gpuInitVarExpr(gpuvar, var);
 
                 gpuexpr = (struct gpuExpr **)&gpuvar;
                 break;
@@ -260,34 +364,8 @@ static struct gpuExpr ** gpuWhere(Expr * expr){
             {
                 struct gpuConst *gpuconst = (struct gpuConst*)palloc(sizeof(struct gpuConst));
                 Const * cpuconst = (Const *)expr;
-                char consttype = get_typtype(cpuconst->consttype);
 
-                switch(consttype){
-                    case TYPTYPE_BASE:
-                        gpuconst->type = GPU_INT;
-                        break;
-
-                    case TYPCATEGORY_NUMERIC:
-                        gpuconst->type = GPU_DECIMAL;
-                        break;
-
-                    case TYPCATEGORY_STRING:
-                        gpuconst->type = GPU_STRING;
-
-                    default:
-                        printf("Const type not supported yet\n");
-                }
-
-                gpuconst->expr.type = GPU_CONST;
-                gpuconst->length = cpuconst->constlen;
-
-                /* FIXME: how to handle variable length data */
-                if(gpuconst->length == -1){
-                    gpuconst->length = datumGetSize(cpuconst->constvalue,false, -1);
-                }
-
-                gpuconst->value = (char*)palloc(gpuconst->length);
-                memcpy(gpuconst->value, DatumGetPointer(cpuconst->constvalue), gpuconst->length);
+                gpuInitConstExpr(gpuconst, cpuconst);
 
                 gpuexpr = (struct gpuExpr **)&gpuconst;
                 break;
@@ -317,9 +395,9 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
     struct gpuScanNode *scannode = NULL;
     ScanState * scanstate = (ScanState *)planstate;
     ProjectionInfo *pi = scanstate->ps.ps_ProjInfo;
-    struct gpuTargetEntry *targetlist = NULL;
-    ListCell *l;
+    struct gpuExpr **targetlist = NULL;
     List * qual = scanstate->ps.plan->qual;
+    ListCell *l;
     int i;
 
     scannode = (struct gpuScanNode*)palloc(sizeof(struct gpuScanNode));
@@ -327,19 +405,33 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
     scannode->plan.leftPlan = NULL;
     scannode->plan.rightPlan = NULL;
 
+    /*
+     * Initialize the scan table info.
+     */ 
+
     scannode->table.tid = RelationGetRelid(scanstate->ss_currentRelation);
+    scannode->table.attrNum = get_relnatts(scannode->table.tid);
+    scannode->table.attrType = (int*)palloc(sizeof(int)*scannode->table.attrNum);
+    scannode->table.attrSize = (int*)palloc(sizeof(int)*scannode->table.attrNum);
+
+    for(i=0;i<scannode->table.attrNum;i++){
+        int typid = get_atttype(scannode->table.tid,i);
+        scannode->table.attrSize[i] = get_typlen(typid);
+        scannode->table.attrType[i] = pgtypeToGPUType(typid);
+    }
 
     assert(pi != NULL);
 
-    scannode->plan.colNum = (list_length(pi->pi_targetlist) - 1) + pi->pi_numSimpleVars; 
-    targetlist = (struct gpuTargetEntry *) palloc(sizeof(struct gpuTargetEntry*) * scannode->plan.colNum);
     /* 
      * Initialize scannode target list.
      * The last entry in the targetlist is a junk entry.
      * The length of the projected list is caculated as:
-     *      number of simple attributes + number of expressions.
+     *      number of simple attributes + number of expressions - 1.
      * resno attribute in each target entry indicates the position in the projected list.
      */
+
+    scannode->plan.attrNum = (list_length(pi->pi_targetlist) - 1) + pi->pi_numSimpleVars; 
+    targetlist = (struct gpuExpr **) palloc(sizeof(struct gpuExpr *) * scannode->plan.attrNum);
 
     foreach(l, pi->pi_targetlist){
         GenericExprState * gestate = (GenericExprState *) lfirst(l);
@@ -354,7 +446,7 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
 
         /* FIXME: support of complex expressions */
 
-        gpuExprInit(te->expr, &targetlist[te->resno]);
+        targetlist[te->resno] = gpuExprInit(te->expr);
 
     }
 
@@ -364,9 +456,7 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
 
         gvar->expr.type = GPU_VAR;
         gvar->index = pi->pi_varNumbers[i];
-        targetlist[offset].length = 0;
-        targetlist[offset].type = 0;
-        targetlist[offset].expr = (struct gpuExpr*)gvar;
+        targetlist[offset] = (struct gpuExpr *) gvar;
     }
 
     scannode->plan.targetlist = targetlist;

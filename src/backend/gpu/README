@@ -31,8 +31,11 @@ Some notes on current implementation (will be updated based on the process):
     variable length data is not handled yet (backend/utils/adt/datum.c).
 
 
+There may be duplicated codes in the current implementation. we will keep refining the codes all the time.
+
 Modified files:
 Optimizer (only generating seq scan plan for regular table node):
     src/backend/optimizer/path/allpaths.c: set_plain_rel_pathlist()
     src/backend/executor/execMain.c: ExecutorStart(), ExecutorRun(): setup OpenCL context, offload to GPU
     (Alternative choice: src/backend/tcop/postgres.c: PostgresMain: setup OpenCL context and intialize query description with it)
+    src/backend/utils/cache/lsysca*.c: get_relnatts(): remove #ifdef to make the function visible

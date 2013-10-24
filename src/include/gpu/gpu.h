@@ -15,9 +15,9 @@ struct gpuTable{
     int tid;          /* relation id to find the table data */
 
     long blockNum;      /* Number of blocks in the table */
-    int colNum;         /* Number of columns in the table */
-    int *colType;       /* Type of each column */
-    int *colSize;       /* Size of each column */
+    int attrNum;         /* Number of columns in the table */
+    int *attrType;       /* Type of each column */
+    int *attrSize;       /* Size of each column */
 
     cl_mem memory;      /* host pinned memory to hold all table data (row-store) */
     cl_mem gpuMemory;   /* GPU memory to hold all the table data */
@@ -71,11 +71,6 @@ struct gpuOpExpr{
     struct gpuExpr *right;     /* the second operand */
 };
 
-struct gpuTargetEntry{
-    struct gpuExpr * expr;      /* the expression tree */
-    int length;                 /* length of this entry */
-    int type;                   /* type of this entry */
-};
 
 /*
  * Simplified snapshot data on GPU.
@@ -97,8 +92,8 @@ struct gpuSnapshot{
 struct gpuPlan{
     int type;                               /* the type of the current node */
 
-    int colNum;
-    struct gpuTargetEntry * targetlist;     /* all the projected results */
+    int attrNum;
+    struct gpuExpr ** * targetlist;     /* all the projected results */
     int whereNum;                           /* length of where expression list */
     struct gpuExpr **whereexpr;             /* for where conditions */
     struct gpuPlan *leftPlan;               /* Point to the child plan or the left child plan */
