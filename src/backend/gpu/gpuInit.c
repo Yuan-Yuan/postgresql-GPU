@@ -132,7 +132,7 @@ static int pgtypeToGPUType(int typid){
             break;
 
         default:
-            printf("Const type not supported yet\n");
+            printf("Type not supported yet %d\n",typid);
     }
 
     return gputype;
@@ -414,8 +414,10 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
     scannode->table.attrType = (int*)palloc(sizeof(int)*scannode->table.attrNum);
     scannode->table.attrSize = (int*)palloc(sizeof(int)*scannode->table.attrNum);
 
-    for(i=0;i<scannode->table.attrNum;i++){
-        int typid = get_atttype(scannode->table.tid,i);
+    /* The attrNum must start from 1 */
+
+    for(i=1;i<=scannode->table.attrNum;i++){
+        int typid = get_atttype(scannode->table.tid, i);
         scannode->table.attrSize[i] = get_typlen(typid);
         scannode->table.attrType[i] = pgtypeToGPUType(typid);
     }
