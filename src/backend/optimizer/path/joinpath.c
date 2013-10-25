@@ -90,6 +90,15 @@ add_paths_to_joinrel(PlannerInfo *root,
 	Relids		extra_lateral_rels = NULL;
 	ListCell   *lc;
 
+	int onGPU = 0;
+
+	foreach(lc, root->rowMarks){
+		PlanRowMark *rc = (PlanRowMark*) lfirst(lc);
+		if(rc->markType == ROW_MARK_GPU)
+			onGPU = 1;
+		break;
+	}
+
 	/*
 	 * Find potential mergejoin clauses.  We can skip this if we are not
 	 * interested in doing a mergejoin.  However, mergejoin may be our only
@@ -210,7 +219,7 @@ add_paths_to_joinrel(PlannerInfo *root,
 	 * 1. Consider mergejoin paths where both relations must be explicitly
 	 * sorted.	Skip this if we can't mergejoin.
 	 */
-	if (mergejoin_allowed)
+	if (mergejoin_allowed && !onGPU)
 		sort_inner_and_outer(root, joinrel, outerrel, innerrel,
 							 restrictlist, mergeclause_list, jointype,
 							 sjinfo,
@@ -254,7 +263,7 @@ add_paths_to_joinrel(PlannerInfo *root,
 	 * before being joined.  As above, disregard enable_hashjoin for full
 	 * joins, because there may be no other alternative.
 	 */
-	if (enable_hashjoin || jointype == JOIN_FULL)
+	if ((enable_hashjoin || jointype == JOIN_FULL) &!onGPU)
 		hash_inner_and_outer(root, joinrel, outerrel, innerrel,
 							 restrictlist, jointype,
 							 sjinfo, &semifactors,

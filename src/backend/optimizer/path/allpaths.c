@@ -395,6 +395,7 @@ set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 			onGPU = 1;
 			break;
 		}
+		break;
 	}
 
 	/*

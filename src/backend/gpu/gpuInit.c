@@ -15,6 +15,7 @@
 
 static struct gpuExpr* gpuExprInit(Expr *);
 static struct gpuExpr** gpuWhere(Expr *);
+static struct gpuPlan * gpuInitPlan(PlanState *);
 
 /*
  * The current dir is datadir, and the kernel file is located in sharedir.
@@ -275,6 +276,7 @@ static struct gpuExpr* gpuExprInit(Expr *cpuExpr){
 
 /*
  * Initialize where condition for query executed on GPUs.
+ * The input must be Expr, not ExprState
  */
 
 static struct gpuExpr ** gpuWhere(Expr * expr){
@@ -418,21 +420,30 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
 
     for(i=1;i<=scannode->table.attrNum;i++){
         int typid = get_atttype(scannode->table.tid, i);
-        scannode->table.attrSize[i] = get_typlen(typid);
-        scannode->table.attrType[i] = pgtypeToGPUType(typid);
+        scannode->table.attrSize[i-1] = get_typlen(typid);
+        scannode->table.attrType[i-1] = pgtypeToGPUType(typid);
     }
 
     assert(pi != NULL);
 
     /* 
      * Initialize scannode target list.
-     * The last entry in the targetlist is a junk entry.
      * The length of the projected list is caculated as:
-     *      number of simple attributes + number of expressions - 1.
+     *      number of simple attributes + number of expressions.
      * resno attribute in each target entry indicates the position in the projected list.
      */
 
-    scannode->plan.attrNum = (list_length(pi->pi_targetlist) - 1) + pi->pi_numSimpleVars; 
+    i = 0;
+    foreach(l,pi->pi_targetlist){
+        GenericExprState * gestate = (GenericExprState *) lfirst(l);
+        TargetEntry * te = (TargetEntry *) gestate->xprstate.expr;
+        if(nodeTag(te->expr) == T_Var)
+            continue;
+        i ++ ;
+    }
+
+    scannode->plan.attrNum = i + pi->pi_numSimpleVars; 
+
     targetlist = (struct gpuExpr **) palloc(sizeof(struct gpuExpr *) * scannode->plan.attrNum);
 
     foreach(l, pi->pi_targetlist){
@@ -477,6 +488,120 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
 }
 
 /*
+ * gpuInitJoin Initialize GPU join node.
+ * Currently we only support simple inner join.
+ */
+
+static struct gpuJoinNode* gpuInitJoin(PlanState *planstate){
+
+    struct gpuJoinNode *joinnode = NULL;
+    NestLoopState * nestjoin = (NestLoopState *) planstate;
+
+    ProjectionInfo *pi = nestjoin->js.ps.ps_ProjInfo;
+    ExprContext * econtext = pi->pi_exprContext;
+    struct gpuExpr **targetlist = NULL;
+
+    List * wherequal = nestjoin->js.ps.plan->qual;
+    List * joinqual = nestjoin->js.joinqual;
+    ListCell *l;
+
+    int i,k;
+    int leftAttrNum, rightAttrNum;
+
+    joinnode = (struct gpuJoinNode*)palloc(sizeof(struct gpuJoinNode));
+    joinnode->plan.type = GPU_JOIN;
+    joinnode->plan.leftPlan = (struct gpuPlan *) gpuInitPlan(planstate->lefttree);
+    joinnode->plan.rightPlan = (struct gpuPlan *) gpuInitPlan(planstate->righttree);
+
+    leftAttrNum = joinnode->plan.leftPlan->attrNum;
+    rightAttrNum = joinnode->plan.rightPlan->attrNum;
+
+    /*
+     * Count the number of projected results,
+     */ 
+
+    k = 0;
+    foreach(l,pi->pi_targetlist){
+        GenericExprState * gestate = (GenericExprState *) lfirst(l);
+        TargetEntry * te = (TargetEntry *) gestate->xprstate.expr;
+        if(nodeTag(te->expr) == T_Var)
+            continue;
+        k++;
+    }
+
+
+    for(i=0;i<pi->pi_numSimpleVars;i++){
+        /* FIXME: decide left or right or junk */
+    }
+
+    joinnode->plan.attrNum = k;
+
+    /*
+     * Initialize the target list.
+     */
+
+    targetlist = (struct gpuExpr **) palloc(sizeof(struct gpuExpr *) * joinnode->plan.attrNum);
+
+    foreach(l, pi->pi_targetlist){
+        GenericExprState * gestate = (GenericExprState *) lfirst(l);
+        TargetEntry * te = (TargetEntry *) gestate->xprstate.expr;
+        if(nodeTag(te->expr) == T_Var){
+
+        /*
+         * This means this is a junk entry.
+         */
+            continue;
+        }
+
+        targetlist[te->resno] = gpuExprInit(te->expr);
+
+    }
+
+    for(i = 0;i<pi->pi_numSimpleVars;i++){
+        int offset = pi->pi_varOutputCols[i];
+        struct gpuVar *gvar = (struct gpuVar*)palloc(sizeof(struct gpuVar));
+
+        /* FIXME: decide left or right or junk */
+
+        gvar->expr.type = GPU_VAR;
+        gvar->index = pi->pi_varNumbers[i];
+        targetlist[offset] = (struct gpuExpr *) gvar;
+    }
+
+    joinnode->plan.targetlist = targetlist;
+
+    if(wherequal){
+        joinnode->plan.whereNum = list_length(wherequal);
+        joinnode->plan.whereexpr = gpuWhere((Expr*)wherequal);
+    }else{
+        joinnode->plan.whereNum = 0;
+        joinnode->plan.whereexpr = NULL;
+    }
+
+    if(joinqual){
+
+        assert(list_length(joinqual) == 1);
+
+        joinnode->joinNum = list_length(joinqual);
+        foreach(l, joinqual){
+            
+            ExprState * es = (ExprState*)lfirst(l);
+            joinnode->joinexpr = gpuWhere(es->expr);
+        }
+    }else{
+        joinnode->joinNum = 0;
+        joinnode->joinexpr = NULL;
+    }
+
+    return joinnode;
+
+}
+
+static void gpuFreeJoin(struct gpuJoinNode *node){
+    return;
+}
+
+/*
  * Free the scan node.
  */
 
@@ -507,6 +632,19 @@ static struct gpuPlan * gpuInitPlan(PlanState *planstate){
                 result = (struct gpuPlan*) gpuInitScan(planstate);
                 break;
             }
+
+        case T_NestLoopState:
+            {
+                result = (struct gpuPlan*) gpuInitJoin(planstate);
+                break;
+            }
+
+        case T_MaterialState:
+            {
+                result = (struct gpuPlan *)gpuInitPlan(outerPlanState(planstate));
+                break;
+            }
+
 
         /* FIXME: support other query operations */
 
@@ -580,6 +718,7 @@ static void gpuQueryPlanInit(QueryDesc * querydesc){
     /*
      * Second step: initialize the query plan.
      */ 
+
     gpuQuery->plan = gpuInitPlan(outerPlan);
 
     querydesc->context->querydesc = gpuQuery;

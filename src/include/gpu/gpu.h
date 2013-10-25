@@ -12,12 +12,12 @@ struct gpuTable{
      * Table meta data will be initialized in query execution step.
      */ 
 
-    int tid;          /* relation id to find the table data */
+    int tid;            /* relation id to find the table data */
 
     long blockNum;      /* Number of blocks in the table */
-    int attrNum;         /* Number of columns in the table */
-    int *attrType;       /* Type of each column */
-    int *attrSize;       /* Size of each column */
+    int attrNum;        /* Number of columns in the table */
+    int *attrType;      /* Type of each column */
+    int *attrSize;      /* Size of each column */
 
     cl_mem memory;      /* host pinned memory to hold all table data (row-store) */
     cl_mem gpuMemory;   /* GPU memory to hold all the table data */
@@ -93,7 +93,7 @@ struct gpuPlan{
     int type;                               /* the type of the current node */
 
     int attrNum;
-    struct gpuExpr ** * targetlist;     /* all the projected results */
+    struct gpuExpr **  targetlist;          /* all the projected results */
     int whereNum;                           /* length of where expression list */
     struct gpuExpr **whereexpr;             /* for where conditions */
     struct gpuPlan *leftPlan;               /* Point to the child plan or the left child plan */
@@ -103,6 +103,12 @@ struct gpuPlan{
 struct gpuScanNode{
     struct gpuPlan plan;            /* points to the query plan */
     struct gpuTable table;          /* table to be scanned */
+};
+
+struct gpuJoinNode{
+    struct gpuPlan plan;            /* points to the query plan */
+    int joinNum;                    /* number of join expressions */
+    struct gpuExpr **joinexpr;      /* join expression */
 };
 
 /*
