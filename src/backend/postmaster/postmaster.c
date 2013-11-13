@@ -78,6 +78,7 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <limits.h>
+#include <sched.h>
 
 #ifdef HAVE_SYS_SELECT_H
 #include <sys/select.h>
@@ -233,6 +234,12 @@ static pgsocket ListenSocket[MAXLISTEN];
  * Set by the -o option
  */
 static char ExtraOptions[MAXPGPATH];
+
+/*
+ * Added by YY: for process affinity.
+ */
+
+int numcpu, currentcpu;
 
 /*
  * These globals control the behavior of the postmaster in case some
@@ -1252,6 +1259,13 @@ PostmasterMain(int argc, char *argv[])
 
 	/* Some workers may be scheduled to start now */
 	maybe_start_bgworker();
+
+	/*
+ 	 * Added by YY: for process affinity
+ 	 */ 
+
+	numcpu = sysconf(_SC_NPROCESSORS_ONLN);
+	currentcpu = 0;
 
 	status = ServerLoop();
 
@@ -3661,6 +3675,15 @@ BackendStartup(Port *port)
 	if (pid == 0)				/* child */
 	{
 		free(bn);
+
+		/*
+ 		 * Added by YY: for process affinity
+ 		 */ 
+		cpu_set_t cpuset;
+		CPU_ZERO(&cpuset);
+		CPU_SET(currentcpu, &cpuset);
+		sched_setaffinity(getpid(), sizeof(cpu_set_t), &cpuset );
+		currentcpu = (++currentcpu) % numcpu;
 
 		/*
 		 * Let's clean up ourselves as the postmaster child, and close the

@@ -42,3 +42,4 @@ Optimizer (only generating seq scan plan for regular table node):
     src/backend/executor/execMain.c: ExecutorStart(), ExecutorRun(): setup OpenCL context, offload to GPU
     (Alternative choice: src/backend/tcop/postgres.c: PostgresMain: setup OpenCL context and intialize query description with it)
     src/backend/utils/cache/lsysca*.c: get_relnatts(): remove #ifdef to make the function visible
+    src/backend/postmaster/postmaster.c: add support for process affinity
