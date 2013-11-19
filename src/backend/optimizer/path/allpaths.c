@@ -383,21 +383,6 @@ set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 {
 	Relids		required_outer;
 
-/*
- * Added by YY for GPU processing.
- */
-	int onGPU = 0;
-	ListCell *l;
-
-	foreach(l, root->rowMarks){
-		PlanRowMark *rc = (PlanRowMark *)lfirst(l);
-		if(rc->markType == ROW_MARK_GPU){
-			onGPU = 1;
-			break;
-		}
-		break;
-	}
-
 	/*
 	 * We don't support pushing join clauses into the quals of a seqscan, but
 	 * it could still have required parameterization due to LATERAL refs in
@@ -408,17 +393,11 @@ set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 	/* Consider sequential scan */
 	add_path(rel, create_seqscan_path(root, rel, required_outer));
 
-/*
- * if condition added by YY for GPU processing.
- */
+	/* Consider index scans */
+	create_index_paths(root, rel);
 
-	if(onGPU == 0){
-		/* Consider index scans */
-		create_index_paths(root, rel);
-
-		/* Consider TID scans */
-		create_tidscan_paths(root, rel);
-	}
+	/* Consider TID scans */
+	create_tidscan_paths(root, rel);
 
 	/* Now find the cheapest of the paths for this rel */
 	set_cheapest(rel);

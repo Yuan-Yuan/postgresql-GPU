@@ -103,9 +103,8 @@ int gpuExec(QueryDesc * querydesc){
 
     struct clContext * context = querydesc->context;
     struct gpuQueryDesc * gpuquerydesc = context->querydesc;
-    ListCell *l;
-    return 0;
 
     gpuExecutePlan(gpuquerydesc->plan, querydesc); 
+
     return 0;
 }

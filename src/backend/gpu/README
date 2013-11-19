@@ -3,8 +3,6 @@ Integration of GPU into Postgres.
 Some notes on current implementation (will be updated based on the process):
 1. To let query execute on OpenCL supported devices, query need to be written with special keywords.
 2. Query parser and optimizer are mostly unaware of the existing of OpenCL devices.
-    If the query will be executed on GPU, only sequential can plan will be generated for regular table node.
-    MergeJoin plan will be generated for all joins when executed on GPU (we only support simple inner join currently).
 
 3. Currently only scan operation is supported. Other operations will be supported later.
 4. For each query that will be executed on GPU, we will create a OpenCL context.

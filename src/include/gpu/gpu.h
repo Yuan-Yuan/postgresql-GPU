@@ -60,7 +60,7 @@ struct gpuBoolExpr{
 };
 
 /*
- * gpuOpExp: an expression in the output.
+ * gpuOpExp: an math expression in the projection list.
  */
 
 struct gpuOpExpr{
@@ -69,6 +69,17 @@ struct gpuOpExpr{
 
     struct gpuExpr *left;      /* the first operand */
     struct gpuExpr *right;     /* the second operand */
+};
+
+/*
+ * gpuAggExpr: an aggregation expression in the projection list. 
+ */
+
+struct gpuAggExpr{
+    struct gpuExpr expr;        /* the general expression */
+
+    int aggType;                /* aggregation type */
+    struct gpuExpr *aggexpr;       /* aggregation expression */
 };
 
 
@@ -109,6 +120,19 @@ struct gpuJoinNode{
     struct gpuPlan plan;            /* points to the query plan */
     int joinNum;                    /* number of join expressions */
     struct gpuExpr **joinexpr;      /* join expression */
+};
+
+struct gpuAggNode{
+    struct gpuPlan plan;            /* points to the query plan */
+    int gbNum;                      /* number of group by expressions */
+    int * gbIndex;                  /* the index array of group by columns */
+};
+
+struct gpuSortNode{
+    struct gpuPlan plan;            /* points to the query plan */
+    int sortNum;                    /* number of order by expressions */
+    int * sortIndex;                /* the index array of order by columns */
+    int * direction;                /* sort descending or ascending */
 };
 
 /*
@@ -177,7 +201,19 @@ enum{
     GPU_CONST,
     GPU_VAR,
     GPU_AGGREF,
-    GPU_TARGETENTRY
+    GPU_TARGETENTRY,
+
+    /* supported AGG Function*/
+    GPU_SUM = 7000,
+    GPU_MAX,
+    GPU_MIN,
+    GPU_AVG,
+    GPU_COUNT,
+
+    GPU_ASC = 8000,
+    GPU_DSC,
+
+    GPU_END
 };
 
 #endif

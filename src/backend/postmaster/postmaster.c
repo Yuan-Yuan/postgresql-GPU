@@ -239,7 +239,7 @@ static char ExtraOptions[MAXPGPATH];
  * Added by YY: for process affinity.
  */
 
-int numcpu, currentcpu;
+static int numcpu, currentcpu;
 
 /*
  * These globals control the behavior of the postmaster in case some
@@ -3672,18 +3672,23 @@ BackendStartup(Port *port)
 	pid = backend_forkexec(port);
 #else							/* !EXEC_BACKEND */
 	pid = fork_process();
-	if (pid == 0)				/* child */
-	{
-		free(bn);
 
-		/*
- 		 * Added by YY: for process affinity
- 		 */ 
+	/*
+	 * Added by YY: for process affinity
+	 */ 
+
+	if(pid >0){
+
 		cpu_set_t cpuset;
 		CPU_ZERO(&cpuset);
 		CPU_SET(currentcpu, &cpuset);
-		sched_setaffinity(getpid(), sizeof(cpu_set_t), &cpuset );
+		sched_setaffinity(pid, sizeof(cpu_set_t), &cpuset );
 		currentcpu = (++currentcpu) % numcpu;
+	}
+
+	if (pid == 0)				/* child */
+	{
+		free(bn);
 
 		/*
 		 * Let's clean up ourselves as the postmaster child, and close the
