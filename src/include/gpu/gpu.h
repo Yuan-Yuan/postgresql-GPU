@@ -10,7 +10,7 @@ struct gpuTable{
 
     /*
      * Table meta data will be initialized in query execution step.
-     */ 
+     */
 
     int tid;            /* relation id to find the table data */
 
@@ -19,8 +19,11 @@ struct gpuTable{
     int *attrType;      /* Type of each column */
     int *attrSize;      /* Size of each column */
 
+    int usedAttr;       /* Number of columns that will be used in the query */
+    int * attrIndex;    /* the index of each used column */
+
     cl_mem memory;      /* host pinned memory to hold all table data (row-store) */
-    cl_mem gpuMemory;   /* GPU memory to hold all the table data */
+    cl_mem *gpuMemory;   /* GPU memory to hold query needed the table data */
 };
 
 /*
@@ -103,17 +106,17 @@ struct gpuSnapshot{
 struct gpuPlan{
     int type;                               /* the type of the current node */
 
-    int attrNum;
+    int attrNum;                            /* the total number of projected attrs */
     struct gpuExpr **  targetlist;          /* all the projected results */
     int whereNum;                           /* length of where expression list */
     struct gpuExpr **whereexpr;             /* for where conditions */
     struct gpuPlan *leftPlan;               /* Point to the child plan or the left child plan */
     struct gpuPlan *rightPlan;              /* Point to the right child plan */
+    struct gpuTable table;                  /* Point to the input table of the current node */
 };
 
 struct gpuScanNode{
     struct gpuPlan plan;            /* points to the query plan */
-    struct gpuTable table;          /* table to be scanned */
 };
 
 struct gpuJoinNode{
@@ -142,6 +145,7 @@ struct gpuSortNode{
 struct gpuQueryDesc{
     struct gpuSnapshot snapshot;            /* snapshot data for MVCC check */
     struct gpuPlan * plan;                  /* The query plan on GPU */
+    int nodeNum;                            /* number of nodes in the query plan tree */
 };
 
 struct clContext{

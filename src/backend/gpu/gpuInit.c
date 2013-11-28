@@ -14,9 +14,9 @@
 #include "gpu/gpu.h"
 
 
-static struct gpuExpr* gpuExprInit(Expr *);
-static struct gpuExpr** gpuWhere(Expr *);
-static struct gpuPlan * gpuInitPlan(PlanState *);
+static struct gpuExpr* gpuExprInit(Expr *, int *);
+static struct gpuExpr** gpuWhere(Expr *, int *);
+static struct gpuPlan * gpuInitPlan(PlanState *, int *);
 
 /*
  * The current dir is datadir, and the kernel file is located in sharedir.
@@ -167,10 +167,16 @@ static inline int pgtypeLength(int typid, int typmod){
         case VARCHAROID:
         case NUMERICOID:
             length = type_maximum_size(typid,typmod) - VARHDRSZ;
+            length /= pg_encoding_max_length(GetDatabaseEncoding());
+            break;
+
+        case TIMESTAMPOID:
+        case INT4OID:
+            length = get_typlen(typid);
             break;
 
         default:
-            length = get_typlen(typid);
+            printf("Typid:%d not supported yet!\n",typid);
             break;
     }
 
@@ -224,7 +230,7 @@ static void gpuInitConstExpr(struct gpuConst *gpuconst, Const * cpuconst){
  * Initialize gpuOpExpr.
  */
 
-static void gpuInitOpExpr(struct gpuOpExpr * gpuopexpr, OpExpr *opexpr){
+static void gpuInitOpExpr(struct gpuOpExpr * gpuopexpr, OpExpr *opexpr, int * attrArray){
 
     char *opname = get_opname(opexpr->opno);
     ListCell *l;
@@ -254,10 +260,10 @@ static void gpuInitOpExpr(struct gpuOpExpr * gpuopexpr, OpExpr *opexpr){
     }
 
     l = list_head(opexpr->args);
-    gpuopexpr->left = gpuExprInit((Expr*)lfirst(l));
+    gpuopexpr->left = gpuExprInit((Expr*)lfirst(l),attrArray);
 
     l = l->next;
-    gpuopexpr->right = gpuExprInit((Expr*)lfirst(l));
+    gpuopexpr->right = gpuExprInit((Expr*)lfirst(l),attrArray);
     gpuopexpr->expr.type = GPU_OPEXPR;
 
     printf("Expression type T_OpExpr\n");
@@ -268,7 +274,7 @@ static void gpuInitOpExpr(struct gpuOpExpr * gpuopexpr, OpExpr *opexpr){
  * Initialize gpuAggExpr.
  */
 
-static void gpuInitAggExpr(struct gpuAggExpr * gpuaggexpr, Aggref * aggref){
+static void gpuInitAggExpr(struct gpuAggExpr * gpuaggexpr, Aggref * aggref, int*attrArray){
 
     char * aggfunc = get_func_name(aggref->aggfnoid);
     ListCell *l;
@@ -291,7 +297,7 @@ static void gpuInitAggExpr(struct gpuAggExpr * gpuaggexpr, Aggref * aggref){
 
     l = list_head(aggref->args);
     TargetEntry * te = (TargetEntry *) lfirst(l);
-    gpuaggexpr->aggexpr = gpuExprInit(te->expr);
+    gpuaggexpr->aggexpr = gpuExprInit(te->expr, attrArray);
 
 };
 
@@ -299,7 +305,7 @@ static void gpuInitAggExpr(struct gpuAggExpr * gpuaggexpr, Aggref * aggref){
  * gpuExprInit: initialize an expression which will be evaluted on GPU.
  */
 
-static struct gpuExpr* gpuExprInit(Expr *cpuExpr){
+static struct gpuExpr* gpuExprInit(Expr *cpuExpr, int *attrArray){
 
     struct gpuExpr * gpuexpr = NULL;
 
@@ -309,6 +315,9 @@ static struct gpuExpr* gpuExprInit(Expr *cpuExpr){
                 Var * var = (Var *)cpuExpr;
                 struct gpuVar * gpuvar = (struct gpuVar*)palloc(sizeof(struct gpuVar));
                 gpuInitVarExpr(gpuvar, var);
+
+                if(attrArray)
+                    attrArray[gpuvar->index] = 1;
 
                 gpuexpr = (struct gpuExpr *)gpuvar;
                 break;
@@ -330,7 +339,7 @@ static struct gpuExpr* gpuExprInit(Expr *cpuExpr){
                 OpExpr *opexpr = (OpExpr *)cpuExpr;
                 struct gpuOpExpr * gpuopexpr = (struct gpuOpExpr*)palloc(sizeof(struct gpuOpExpr));
 
-                gpuInitOpExpr(gpuopexpr,opexpr);
+                gpuInitOpExpr(gpuopexpr,opexpr, attrArray);
 
                 gpuexpr = (struct gpuExpr *)gpuopexpr;
                 break;
@@ -341,7 +350,7 @@ static struct gpuExpr* gpuExprInit(Expr *cpuExpr){
                 Aggref * aggref = (Aggref *)cpuExpr;
                 struct gpuAggExpr * gpuaggexpr = (struct gpuAggExpr*)palloc(sizeof(struct gpuAggExpr));
 
-                gpuInitAggExpr(gpuaggexpr, aggref);
+                gpuInitAggExpr(gpuaggexpr, aggref,attrArray);
                 gpuexpr = (struct gpuExpr *)gpuaggexpr;
                 break;
             }
@@ -359,7 +368,7 @@ static struct gpuExpr* gpuExprInit(Expr *cpuExpr){
  * The input must be Expr, not ExprState
  */
 
-static struct gpuExpr ** gpuWhere(Expr * expr){
+static struct gpuExpr ** gpuWhere(Expr * expr, int * attrArray){
 
     struct gpuExpr ** gpuexpr = NULL;
     ListCell *l;
@@ -376,7 +385,7 @@ static struct gpuExpr ** gpuWhere(Expr * expr){
                 gpuboolexpr->args = (struct gpuExpr**)palloc(gpuboolexpr->argNum * sizeof(struct gpuExpr*));
 
                 foreach(l,qual){
-                    gpuboolexpr->args[i] = *gpuWhere((Expr*)lfirst(l));
+                    gpuboolexpr->args[i] = *gpuWhere((Expr*)lfirst(l), attrArray);
                     i+=1;
                 }
                 gpuexpr = (struct gpuExpr **)&gpuboolexpr;
@@ -413,7 +422,7 @@ static struct gpuExpr ** gpuWhere(Expr * expr){
                 gpuboolexpr->args = (struct gpuExpr **)palloc(gpuboolexpr->argNum * sizeof(struct gpuExpr*));
 
                 foreach(l,boolexpr->args){
-                    gpuboolexpr->args[i] = * gpuWhere((Expr*)lfirst(l));
+                    gpuboolexpr->args[i] = * gpuWhere((Expr*)lfirst(l),attrArray);
                 }
 
                 gpuexpr = (struct gpuExpr**)&gpuboolexpr;
@@ -425,7 +434,7 @@ static struct gpuExpr ** gpuWhere(Expr * expr){
                 struct gpuOpExpr *gpuopexpr = (struct gpuOpExpr *)palloc(sizeof(struct gpuOpExpr));
                 OpExpr   *opexpr = (OpExpr *) expr;
 
-                gpuInitOpExpr(gpuopexpr, opexpr);
+                gpuInitOpExpr(gpuopexpr, opexpr, attrArray);
 
                 gpuexpr = (struct gpuExpr **)&gpuopexpr;
                 break;
@@ -480,7 +489,7 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
     struct gpuExpr **targetlist = NULL;
     List * qual = scanstate->ps.plan->qual;
     ListCell *l;
-    int i;
+    int i, k, *attrArray, usedAttr;
 
     scannode = (struct gpuScanNode*)palloc(sizeof(struct gpuScanNode));
     scannode->plan.type = GPU_SCAN;
@@ -491,18 +500,25 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
      * Initialize the scan table info.
      */ 
 
-    scannode->table.tid = RelationGetRelid(scanstate->ss_currentRelation);
-    scannode->table.attrNum = get_relnatts(scannode->table.tid);
-    scannode->table.attrType = (int*)palloc(sizeof(int)*scannode->table.attrNum);
-    scannode->table.attrSize = (int*)palloc(sizeof(int)*scannode->table.attrNum);
+    scannode->plan.table.tid = RelationGetRelid(scanstate->ss_currentRelation);
+    scannode->plan.table.attrNum = get_relnatts(scannode->plan.table.tid);
+    scannode->plan.table.attrType = (int*)palloc(sizeof(int)*scannode->plan.table.attrNum);
+    scannode->plan.table.attrSize = (int*)palloc(sizeof(int)*scannode->plan.table.attrNum);
+    attrArray = (int *)palloc(sizeof(int)*scannode->plan.table.attrNum);
 
-    /* The attrNum must start from 1 */
+    /* The postgresql attrNum starts from 1 */
 
-    for(i=1;i<=scannode->table.attrNum;i++){
-        int typid = get_atttype(scannode->table.tid, i);
-        int typmod = get_atttypmod(scannode->table.tid,i);
-        scannode->table.attrSize[i-1] = pgtypeLength(typid,typmod);
-        scannode->table.attrType[i-1] = pgtypeToGPUType(typid);
+    for(i=1;i<=scannode->plan.table.attrNum;i++){
+        int typid = get_atttype(scannode->plan.table.tid, i);
+        int typmod = get_atttypmod(scannode->plan.table.tid,i);
+
+        /*
+         * if the attrSize is -1, this means this is a variable length data.
+         */ 
+
+        scannode->plan.table.attrSize[i-1] = pgtypeLength(typid,typmod); 
+        scannode->plan.table.attrType[i-1] = pgtypeToGPUType(typid);
+        attrArray[i-1] = -1;
     }
 
     assert(pi != NULL);
@@ -530,6 +546,7 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
     foreach(l, pi->pi_targetlist){
         GenericExprState * gestate = (GenericExprState *) lfirst(l);
         TargetEntry * te = (TargetEntry *) gestate->xprstate.expr;
+
         if(nodeTag(te->expr) == T_Var){
 
         /*
@@ -540,27 +557,47 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
 
         /* FIXME: support of complex expressions */
 
-        targetlist[te->resno - 1] = gpuExprInit(te->expr);
+        targetlist[te->resno - 1] = gpuExprInit(te->expr,attrArray);
 
     }
 
     for(i = 0;i<pi->pi_numSimpleVars;i++){
-        int offset = pi->pi_varOutputCols[i];
+
+        /* 
+         * pi_varOutputCols : position in the outputlist, start from 1
+         * pi_varNumbers: input column index, start from 1 
+         */
+        int offset = pi->pi_varOutputCols[i] - 1;
         struct gpuVar *gvar = (struct gpuVar*)palloc(sizeof(struct gpuVar));
 
+        gvar->index = pi->pi_varNumbers[i] - 1;
         gvar->expr.type = GPU_VAR;
-        gvar->index = pi->pi_varNumbers[i];
+
         targetlist[offset] = (struct gpuExpr *) gvar;
+        attrArray[gvar->index] = 1;
     }
 
     scannode->plan.targetlist = targetlist;
 
     if(qual){
         scannode->plan.whereNum = list_length(qual);
-        scannode->plan.whereexpr = gpuWhere((Expr*)qual);
+        scannode->plan.whereexpr = gpuWhere((Expr*)qual, attrArray);
     }else{
         scannode->plan.whereNum = 0;
         scannode->plan.whereexpr = NULL;
+    }
+
+    for(i=0, usedAttr = 0;i<scannode->plan.table.attrNum;i++){
+        if(attrArray[i]!= -1)
+            usedAttr ++;
+    }
+
+    scannode->plan.table.usedAttr = usedAttr;
+    scannode->plan.table.attrIndex = (int *)palloc(sizeof(int)*usedAttr);
+    for(i=0, k = 0; i < scannode->plan.table.attrNum; i++){
+        if(attrArray[i] != -1){
+            scannode->plan.table.attrIndex[k++] = i; 
+        }
     }
 
     return scannode;
@@ -571,7 +608,7 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
  * Currently we only support simple inner join.
  */
 
-static struct gpuJoinNode* gpuInitJoin(PlanState *planstate){
+static struct gpuJoinNode* gpuInitJoin(PlanState *planstate, int *nodeNum){
 
     struct gpuJoinNode *joinnode = NULL;
     JoinState * joinstate = (JoinState *) planstate;
@@ -586,10 +623,11 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate){
     int i,k;
     int leftAttrNum, rightAttrNum;
 
+    *nodeNum = *nodeNum + 1;
     joinnode = (struct gpuJoinNode*)palloc(sizeof(struct gpuJoinNode));
     joinnode->plan.type = GPU_JOIN;
-    joinnode->plan.leftPlan = (struct gpuPlan *) gpuInitPlan(planstate->lefttree);
-    joinnode->plan.rightPlan = (struct gpuPlan *) gpuInitPlan(planstate->righttree);
+    joinnode->plan.leftPlan = (struct gpuPlan *) gpuInitPlan(planstate->lefttree, nodeNum);
+    joinnode->plan.rightPlan = (struct gpuPlan *) gpuInitPlan(planstate->righttree, nodeNum);
 
     leftAttrNum = joinnode->plan.leftPlan->attrNum;
     rightAttrNum = joinnode->plan.rightPlan->attrNum;
@@ -631,7 +669,7 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate){
             continue;
         }
 
-        targetlist[te->resno] = gpuExprInit(te->expr);
+        targetlist[te->resno] = gpuExprInit(te->expr, NULL);
 
     }
 
@@ -650,7 +688,7 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate){
 
     if(wherequal){
         joinnode->plan.whereNum = list_length(wherequal);
-        joinnode->plan.whereexpr = gpuWhere((Expr*)wherequal);
+        joinnode->plan.whereexpr = gpuWhere((Expr*)wherequal, NULL);
     }else{
         joinnode->plan.whereNum = 0;
         joinnode->plan.whereexpr = NULL;
@@ -664,7 +702,7 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate){
         foreach(l, joinqual){
             
             ExprState * es = (ExprState*)lfirst(l);
-            joinnode->joinexpr = gpuWhere(es->expr);
+            joinnode->joinexpr = gpuWhere(es->expr, NULL);
         }
     }else{
         joinnode->joinNum = 0;
@@ -675,7 +713,7 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate){
 
 }
 
-static struct gpuAggNode * gpuInitAgg(struct PlanState * planstate){
+static struct gpuAggNode * gpuInitAgg(struct PlanState * planstate, int * nodeNum){
 
     struct gpuAggNode * aggnode = NULL;
     struct AggState * aggstate = (struct AggState*)planstate;
@@ -686,9 +724,10 @@ static struct gpuAggNode * gpuInitAgg(struct PlanState * planstate){
     ListCell *l;
     int i;
 
+    *nodeNum = *nodeNum + 1;
     aggnode = (struct gpuAggNode*)palloc(sizeof(struct gpuAggNode));
     aggnode->plan.type = GPU_AGG;
-    aggnode->plan.leftPlan = (struct gpuPlan *) gpuInitPlan(planstate->lefttree);
+    aggnode->plan.leftPlan = (struct gpuPlan *) gpuInitPlan(planstate->lefttree, nodeNum);
     aggnode->plan.rightPlan = NULL;
 
     /* 
@@ -724,7 +763,7 @@ static struct gpuAggNode * gpuInitAgg(struct PlanState * planstate){
 
         /* FIXME: support of complex expressions */
 
-        targetlist[te->resno - 1] = gpuExprInit(te->expr);
+        targetlist[te->resno - 1] = gpuExprInit(te->expr, NULL);
 
     }
 
@@ -745,7 +784,7 @@ static struct gpuAggNode * gpuInitAgg(struct PlanState * planstate){
 
     if(qual){
         aggnode->plan.whereNum = list_length(qual);
-        aggnode->plan.whereexpr = gpuWhere((Expr*)qual);
+        aggnode->plan.whereexpr = gpuWhere((Expr*)qual, NULL);
     }else{
         aggnode->plan.whereNum = 0;
         aggnode->plan.whereexpr = NULL;
@@ -767,7 +806,7 @@ static struct gpuAggNode * gpuInitAgg(struct PlanState * planstate){
 
 }
 
-static struct gpuSortNode * gpuInitSort(struct PlanState * planstate){
+static struct gpuSortNode * gpuInitSort(struct PlanState * planstate, int * nodeNum){
 
     struct gpuSortNode * sortnode = NULL;
     struct SortState * sortstate = (struct SortState*)planstate;
@@ -778,9 +817,10 @@ static struct gpuSortNode * gpuInitSort(struct PlanState * planstate){
     ListCell *l;
     int i;
 
+    *nodeNum = *nodeNum + 1;
     sortnode = (struct gpuSortNode*)palloc(sizeof(struct gpuSortNode));
     sortnode->plan.type = GPU_SORT;
-    sortnode->plan.leftPlan = (struct gpuPlan *) gpuInitPlan(planstate->lefttree);
+    sortnode->plan.leftPlan = (struct gpuPlan *) gpuInitPlan(planstate->lefttree, nodeNum);
     sortnode->plan.rightPlan = NULL;
 
     /* 
@@ -816,7 +856,7 @@ static struct gpuSortNode * gpuInitSort(struct PlanState * planstate){
 
         /* FIXME: support of complex expressions */
 
-        targetlist[te->resno - 1] = gpuExprInit(te->expr);
+        targetlist[te->resno - 1] = gpuExprInit(te->expr, NULL);
 
     }
 
@@ -837,7 +877,7 @@ static struct gpuSortNode * gpuInitSort(struct PlanState * planstate){
 
     if(qual){
         sortnode->plan.whereNum = list_length(qual);
-        sortnode->plan.whereexpr = gpuWhere((Expr*)qual);
+        sortnode->plan.whereexpr = gpuWhere((Expr*)qual, NULL);
     }else{
         sortnode->plan.whereNum = 0;
         sortnode->plan.whereexpr = NULL;
@@ -870,8 +910,8 @@ static void gpuFreeScan(struct gpuScanNode * node){
 
     /* FIXME: release of other table meta data */
 
-    clReleaseMemObject(node->table.memory);
-    clReleaseMemObject(node->table.gpuMemory);
+    clReleaseMemObject(node->plan.table.memory);
+    clReleaseMemObject(node->plan.table.gpuMemory);
 
     //pfree(node);
 }
@@ -892,7 +932,7 @@ static void gpuFreeSort(struct gpuSortNode * sort){
  * gpuInitPlan: initialize gpu query plan.
  */
 
-static struct gpuPlan * gpuInitPlan(PlanState *planstate){
+static struct gpuPlan * gpuInitPlan(PlanState *planstate, int * nodeNum){
 
     struct gpuPlan * result = NULL;
 
@@ -900,6 +940,8 @@ static struct gpuPlan * gpuInitPlan(PlanState *planstate){
 
         /*
          * Scan node: current we do not distinguish different scan nodes.
+         * FIXME: we needto handle different scan nodes to get the qual exprs.
+         * For example, a simple scan query with where predicate, the quals may be in index qual and ps.qual.
          */ 
         case T_SeqScanState:
         case T_IndexScanState:
@@ -913,6 +955,7 @@ static struct gpuPlan * gpuInitPlan(PlanState *planstate){
         case T_WorkTableScanState:
         case T_ForeignScanState:
             {
+                *nodeNum = *nodeNum + 1;
                 result = (struct gpuPlan*) gpuInitScan(planstate);
                 break;
             }
@@ -925,7 +968,7 @@ static struct gpuPlan * gpuInitPlan(PlanState *planstate){
         case T_MergeJoinState:
         case T_HashJoinState:
             {
-                result = (struct gpuPlan*) gpuInitJoin(planstate);
+                result = (struct gpuPlan*) gpuInitJoin(planstate, nodeNum);
                 break;
             }
 
@@ -935,7 +978,7 @@ static struct gpuPlan * gpuInitPlan(PlanState *planstate){
 
         case T_AggState:
             {
-                result = (struct gpuPlan*) gpuInitAgg(planstate);
+                result = (struct gpuPlan*) gpuInitAgg(planstate, nodeNum);
                 break;
             }
 
@@ -944,7 +987,7 @@ static struct gpuPlan * gpuInitPlan(PlanState *planstate){
          */ 
         case T_SortState:
             {
-                result = (struct gpuPlan*) gpuInitSort(planstate);
+                result = (struct gpuPlan*) gpuInitSort(planstate, nodeNum);
                 break;
             }
 
@@ -959,7 +1002,7 @@ static struct gpuPlan * gpuInitPlan(PlanState *planstate){
         case T_HashState:
         case T_SetOpState:
             {
-                result = (struct gpuPlan *)gpuInitPlan(outerPlanState(planstate));
+                result = (struct gpuPlan *)gpuInitPlan(outerPlanState(planstate), nodeNum);
                 break;
             }
 
@@ -1039,6 +1082,7 @@ static void gpuQueryPlanInit(QueryDesc * querydesc){
 
     PlanState *outerPlan = outerPlanState(querydesc->planstate);
     struct gpuQueryDesc *gpuQuery;
+    int nodeNum = 0;
 
     assert(nodeTag(querydesc->planstate) == T_LockRowsState);
 
@@ -1053,7 +1097,8 @@ static void gpuQueryPlanInit(QueryDesc * querydesc){
      * Second step: initialize the query plan.
      */ 
 
-    gpuQuery->plan = gpuInitPlan(outerPlan);
+    gpuQuery->plan = gpuInitPlan(outerPlan, &nodeNum);
+    gpuQuery->nodeNum = nodeNum;
 
     querydesc->context->querydesc = gpuQuery;
 
