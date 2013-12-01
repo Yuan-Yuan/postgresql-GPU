@@ -135,7 +135,7 @@ static int pgtypeToGPUType(int typid){
             break;
 
         case NUMERICOID:
-            gputype = GPU_NUMERIC;
+            gputype = GPU_FLOAT;
             break;
 
         case TEXTOID:
@@ -211,23 +211,23 @@ static void gpuInitOpExpr(struct gpuOpExpr * gpuopexpr, OpExpr *opexpr, int * at
     assert(list_length(opexpr->args)== 2);
 
     if(strcmp(opname, "=") == 0){
-        gpuopexpr->opType = GPU_GT;
+        gpuopexpr->expr.type = GPU_GT;
     }else if (strcmp(opname,">=")){
-        gpuopexpr->opType = GPU_GEQ;
+        gpuopexpr->expr.type = GPU_GEQ;
     }else if (strcmp(opname,">")){
-        gpuopexpr->opType = GPU_EQ;
+        gpuopexpr->expr.type = GPU_EQ;
     }else if (strcmp(opname,"<=")){
-        gpuopexpr->opType = GPU_LEQ;
+        gpuopexpr->expr.type = GPU_LEQ;
     }else if (strcmp(opname,"<")){
-        gpuopexpr->opType = GPU_LT;
+        gpuopexpr->expr.type = GPU_LT;
     }else if (strcmp(opname,"+")){
-        gpuopexpr->opType = GPU_ADD;
+        gpuopexpr->expr.type = GPU_ADD;
     }else if (strcmp(opname,"-")){
-        gpuopexpr->opType = GPU_MINUS;
+        gpuopexpr->expr.type = GPU_MINUS;
     }else if (strcmp(opname,"*")){
-        gpuopexpr->opType = GPU_MULTIPLY;
+        gpuopexpr->expr.type = GPU_MULTIPLY;
     }else if (strcmp(opname,"/")){
-        gpuopexpr->opType = GPU_DIVIDE;
+        gpuopexpr->expr.type = GPU_DIVIDE;
     }
 
     l = list_head(opexpr->args);
@@ -351,12 +351,12 @@ static struct gpuExpr ** gpuWhere(Expr * expr, int * attrArray){
                 List * qual = (List*)expr;
                 struct gpuBoolExpr * gpuboolexpr = (struct gpuBoolExpr*)palloc(sizeof(struct gpuBoolExpr));
 
-                gpuboolexpr->opType = GPU_AND;
+                gpuboolexpr->expr.type = GPU_AND;
                 gpuboolexpr->argNum = list_length(qual);
                 gpuboolexpr->args = (struct gpuExpr**)palloc(gpuboolexpr->argNum * sizeof(struct gpuExpr*));
 
                 foreach(l,qual){
-                    gpuboolexpr->args[i] = *gpuWhere((Expr*)lfirst(l), attrArray);
+                    gpuboolexpr->args[i] = *(gpuWhere((Expr*)lfirst(l), attrArray));
                     i+=1;
                 }
                 gpuexpr = (struct gpuExpr **)&gpuboolexpr;
@@ -371,17 +371,17 @@ static struct gpuExpr ** gpuWhere(Expr * expr, int * attrArray){
                 switch(boolexpr->boolop){
                     case AND_EXPR:
                         {
-                            gpuboolexpr->opType = GPU_AND;
+                            gpuboolexpr->expr.type = GPU_AND;
                             break;
                         }
                     case OR_EXPR:
                         {
-                            gpuboolexpr->opType = GPU_OR;
+                            gpuboolexpr->expr.type = GPU_OR;
                             break;
                         }
                     case NOT_EXPR:
                         {
-                            gpuboolexpr->opType = GPU_NOT;
+                            gpuboolexpr->expr.type = GPU_NOT;
                             break;
                         }
                     default:
@@ -393,7 +393,7 @@ static struct gpuExpr ** gpuWhere(Expr * expr, int * attrArray){
                 gpuboolexpr->args = (struct gpuExpr **)palloc(gpuboolexpr->argNum * sizeof(struct gpuExpr*));
 
                 foreach(l,boolexpr->args){
-                    gpuboolexpr->args[i] = * gpuWhere((Expr*)lfirst(l),attrArray);
+                    gpuboolexpr->args[i] = *gpuWhere((Expr*)lfirst(l),attrArray);
                 }
 
                 gpuexpr = (struct gpuExpr**)&gpuboolexpr;
@@ -507,8 +507,7 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
              */ 
 
             case NUMERICOID:
-                attrlen = type_maximum_size(typid,typmod) - VARHDRSZ;
-                attrlen /= pg_encoding_max_length(GetDatabaseEncoding());
+                attrlen = sizeof(float); 
                 scannode->plan.table.variLen[i-1] = 1;
                 break;
 
@@ -596,6 +595,7 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
     if(qual){
         scannode->plan.whereNum = list_length(qual);
         scannode->plan.whereexpr = gpuWhere((Expr*)qual, attrArray);
+
     }else{
         scannode->plan.whereNum = 0;
         scannode->plan.whereexpr = NULL;

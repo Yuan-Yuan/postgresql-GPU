@@ -66,7 +66,6 @@ struct gpuConst{
 
 struct gpuBoolExpr{
     struct gpuExpr expr;        /* the general expression */
-    int opType;                 /* and , or */
 
     int argNum;                 /* Number of bool expressions */
 
@@ -79,7 +78,6 @@ struct gpuBoolExpr{
 
 struct gpuOpExpr{
     struct gpuExpr expr;        /* the general expression */
-    int opType;                 /* the operation type */
 
     struct gpuExpr *left;      /* the first operand */
     struct gpuExpr *right;     /* the second operand */
@@ -191,7 +189,6 @@ enum{
     GPU_INT = 2000,
     GPU_FLOAT,
     GPU_DOUBLE,
-    GPU_NUMERIC,
     GPU_STRING,
 
     /* Node type in the query plan tree */

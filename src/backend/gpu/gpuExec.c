@@ -17,6 +17,35 @@
  */
 
 static void countWhereAttr(struct gpuExpr * expr, int *attr, int n){
+    int i;
+
+    switch(expr->type){
+        case GPU_AND:
+        case GPU_OR:
+        case GPU_NOT:
+            {
+                struct gpuBoolExpr * boolexpr = (struct gpuBoolExpr*)expr;
+                for(i = 0;i<boolexpr->argNum;i++){
+                    countWhereAttr(boolexpr->args[i], attr, n);
+                }
+                break;
+            }
+        case GPU_GT:
+        case GPU_GEQ:
+        case GPU_EQ:
+        case GPU_LEQ:
+        case GPU_LT:
+            {
+                struct gpuOpExpr *opexpr = (struct gpuOpExpr*)expr;
+                countWhereAttr(opexpr->left, attr,n);
+                countWhereAttr(opexpr->right, attr,n);
+                break;
+            }
+
+        default:
+            printf("GPU where expression type not supported yet:%d\n", expr->type);
+            break;
+    }
 
 }
 
@@ -25,7 +54,32 @@ static void countWhereAttr(struct gpuExpr * expr, int *attr, int n){
  */
 
 static void setupGpuWhere(int * index, struct gpuScanNode *node, struct scanNode *sn, struct gpuExpr * expr ){
+    int i;
 
+    switch(expr->type){
+        case GPU_AND:
+        case GPU_OR:
+        case GPU_NOT:
+            {
+                struct gpuBoolExpr * boolexpr = (struct gpuBoolExpr*)expr;
+                for(i = 0;i<boolexpr->argNum;i++){
+                    ;
+                }
+                break;
+            }
+        case GPU_GT:
+        case GPU_GEQ:
+        case GPU_EQ:
+        case GPU_LEQ:
+        case GPU_LT:
+            {
+                break;
+            }
+
+        default:
+            printf("GPU where expression type not supprted yet:%d\n",expr->type);
+            break;
+    }
 }
 
 /*
@@ -192,19 +246,20 @@ static void gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
      * FIXME: currently we don't support complex where conditions
      */
 
-    assert(node->plan.whereNum == 1);
+    assert(node->plan.whereNum <= 1);
 
     int * attr = (int*)palloc(sizeof(int)* table->attrNum);
     memset(attr,0,sizeof(int) * table->attrNum);
 
-    countWhereAttr(node->plan.whereexpr[0], attr, table->attrNum);
+    if(node->plan.whereNum != 0){
 
-    index = 0;
-    for(i=0;i<table->attrNum;i++){
-        if(attr[i] != 0)
-            index ++;
+        countWhereAttr(node->plan.whereexpr[0], attr, table->attrNum);
+        for(i=0, index = 0;i<table->attrNum;i++){
+            if(attr[i] != 0)
+                index ++;
+        }
     }
-    
+
     sn.whereIndex = (int*)palloc(sizeof(int) * index);
     sn.outputIndex = (int*)palloc(sizeof(int) * node->plan.attrNum);
 
