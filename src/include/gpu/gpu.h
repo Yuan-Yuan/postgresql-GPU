@@ -2,6 +2,13 @@
 #define POSTGRES_GPU_H
 #include <CL/cl.h>
 
+
+/*
+ * Instead of tuple-a-time processing, we process multiple pages for each operator.
+ * The Macro BLOCK defines how many pages we process each time for scan operators.
+ */
+#define BLOCK   4096
+
 /*
  * GPU table related info.
  */
@@ -18,12 +25,16 @@ struct gpuTable{
     int attrNum;        /* Number of columns in the table */
     int *attrType;      /* Type of each column */
     int *attrSize;      /* Size of each column */
+    int *variLen;       /* whether the attribute is a variable length column */
+
+    int tupleSize;      
 
     int usedAttr;       /* Number of columns that will be used in the query */
-    int * attrIndex;    /* the index of each used column */
+    int *attrIndex;     /* the index of each used column */
+    int *indexIndirect;  
 
-    cl_mem memory;      /* host pinned memory to hold all table data (row-store) */
-    cl_mem *gpuMemory;   /* GPU memory to hold query needed the table data */
+    char **cpuCol;      /* host memory to hold query needed data (col-store) */
+    cl_mem *gpuCol;     /* GPU memory to hold query needed the table data and results */
 };
 
 /*
@@ -117,6 +128,7 @@ struct gpuPlan{
 
 struct gpuScanNode{
     struct gpuPlan plan;            /* points to the query plan */
+    int scanPos;                    /* starting page of the scan */
 };
 
 struct gpuJoinNode{
@@ -177,7 +189,9 @@ enum{
 
     /* Supported data type on GPU */
     GPU_INT = 2000,
-    GPU_DECIMAL,
+    GPU_FLOAT,
+    GPU_DOUBLE,
+    GPU_NUMERIC,
     GPU_STRING,
 
     /* Node type in the query plan tree */

@@ -8,6 +8,26 @@
 #include "utils/tqual.h"
 #include "gpu/gpu.h"
 
+#include "gpu/common.h"
+#include "gpu/hashJoin.h"
+#include "gpu/cpuOpenclLib.h"
+
+/*
+ * countWhereAttr: given a whereExpr in plan node, count how many attributes are used
+ */
+
+static void countWhereAttr(struct gpuExpr * expr, int *attr, int n){
+
+}
+
+/*
+ * Setup the whereExp in scanNode based on gpuExpr
+ */
+
+static void setupGpuWhere(int * index, struct gpuScanNode *node, struct scanNode *sn, struct gpuExpr * expr ){
+
+}
+
 /*
  * Execute SCAN opeartion on GPU.
  * Need to handle MVCC check and Serialization check when getting tuples from the storage.
@@ -19,8 +39,9 @@ static void gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
     int relid = node->plan.table.tid;
     int nattr = node->plan.attrNum;
     int attrLen = 0, attrIndex = 0;
-    long tableSize = 0;
-    long tupleNum = 0, totalTupleNum = 0, offset = 0;
+    long tupleNum = 0, totalTupleNum = 0;
+    int index, offset = 0, tupleSize = 0;
+    struct gpuTable * table = &(node->plan.table);
 
     HeapTupleData tupledata;
     ItemId lpp;
@@ -33,35 +54,26 @@ static void gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
     void * clTmp;
 
 
+    tupleSize = table->tupleSize;
     Relation r = RelationIdGetRelation(relid);
     BlockNumber bln = RelationGetNumberOfBlocks(r);
 
     /*
      * Calculate table size.
      * Allocate the needed memory using CL_MEM_ALLOC_HOST_PTR flag.
-     * Very inefficient here.
-     * Copy the data to the opencl managed memory (on the host side).
      */
 
-    node->plan.table.blockNum = bln;
-    tableSize = bln * BLCKSZ;
-    node->plan.table.memory = clCreateBuffer(context->context,CL_MEM_READ_ONLY|CL_MEM_ALLOC_HOST_PTR, tableSize, NULL, &error);
+    table->blockNum = bln;
+    tupleNum = (bln * BLCKSZ + tupleSize)/ tupleSize;
 
-    if(error != CL_SUCCESS){
-        printf("Failed tot allocate opencl memory with size :%ld\n",tableSize);
-    }
+    /*
+     * FIXME: how to determine the size of the allocated space.
+     * 1. bln * BLCKSZ / tupleSize to estimate the number of tuples.
+     */ 
 
-    clTmp = clEnqueueMapBuffer(context->queue,(cl_mem)node->plan.table.memory,CL_TRUE,CL_MAP_WRITE,0,tableSize,0,0,0,&error);
-    if(error != CL_SUCCESS){
-        printf("Failed to map opencl memory\n");
-    }
-
-    for(i = 0; i<node->plan.attrNum;i++ ){
-        //node->plan.table.gpuMemory[i] = clCreateBuffer(context->context, CL_MEM_READ_WRITE, node->plan.table.attrSize[i] * totalTupleNum, NULL, &error);
-
-        if(error != CL_SUCCESS){
-            printf("Failed to allocate memory on GPU device\n");
-        }
+    for(i=0;i<table->usedAttr;i++){
+        index = table->attrIndex[i];
+        table->cpuCol[i] = (char*)palloc(tupleNum * table->attrSize[index]);
     }
 
     /*
@@ -99,15 +111,32 @@ static void gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
                      * If the tuple passes both check, copy the actual data to OpenCL memory (from row to column).
                      * When copying data, we need first skip the HeapTupleHeader offset.
                      * For each variable length attribute, we store it in a fixed length memory when processing on gpu. 
-                     * VARSIZE_ANY(any) to get the actual length of variable length attribute.
+                     * FIXME: how to handle header of the variable length data.
+                     * FIXME: how to accelerate seriliaztion check.
                      */
 
-                    offset = 0, attrIndex = 0;
+                    offset = tupledata.t_data->t_hoff, attrIndex = 0;
 
                     for(j = 0; j < nattr; j ++){
-                        if(j == node->plan.table.attrIndex[attrIndex]){
+                        if(j == table->attrIndex[attrIndex]){
+
+                            if(table->variLen[j] == 1){
+                                memcpy(table->cpuCol[attrIndex] + totalTupleNum *table->attrSize[j], (char*)tupledata.t_data+offset, VARSIZE_ANY((char*)tupledata.t_data+offset));
+                                offset += VARSIZE_ANY(((char*)tupledata.t_data + offset));
+                            }else{
+                                memcpy(table->cpuCol[attrIndex] + totalTupleNum * table->attrSize[j], (char*)tupledata.t_data + offset, table->attrSize[j]);
+                                offset += table->attrSize[j];
+                            }
+
                             attrIndex ++ ;
                         }
+
+                        if(node->plan.table.variLen[j] == 1){
+                            offset += VARSIZE_ANY(((char*)tupledata.t_data + offset));
+                        }else{
+                            offset += node->plan.table.attrSize[j];
+                        }
+
                     }
 
                     totalTupleNum ++;
@@ -120,16 +149,77 @@ static void gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
 
     RelationClose(r);
 
-    clEnqueueUnmapMemObject(context->queue,(cl_mem)node->plan.table.memory,clTmp,0,0,0);
-
     /*
      * Execute the Scan query on GPU.
      * Initialize the data structure and call the gpudb primitives.
      */
 
+    struct tableNode * tnRes = (struct tableNode *)palloc(sizeof(struct tableNode));
+    struct tableNode * tn = (struct tableNode *)palloc(sizeof(struct tableNode));
+    struct statistic pp;
+    pp.total = pp.kernel = pp.pcie = 0;
+
+    initTable(tn);
+    tn->totalAttr = table->usedAttr;
+    tn->attrSize = (int *)palloc(sizeof(int) * tn->totalAttr);
+    tn->attrType = (int *)palloc(sizeof(int) * tn->totalAttr);
+    tn->attrIndex = (int *)palloc(sizeof(int) * tn->totalAttr);
+    tn->attrTotalSize = (int *)palloc(sizeof(int) * tn->totalAttr);
+    tn->dataPos = (int *)palloc(sizeof(int) * tn->totalAttr);
+    tn->dataFormat = (int *)palloc(sizeof(int) * tn->totalAttr);
+    tn->content = (char **)palloc(sizeof(int) * tn->totalAttr);
+
+    for(i = 0; i<tn->totalAttr;i++){
+        index = table->attrIndex[i];
+        tn->attrSize[i] = table->attrSize[index];
+        tn->attrType[i] = table->attrType[index];
+        tn->attrIndex[i] = index;
+        tn->attrTotalSize[i] = totalTupleNum * tn->attrSize[index];
+
+        tn->dataPos[i] = MEM;
+        tn->dataFormat[i] = UNCOMPRESSED;
+        tn->content[i] = (char *) table->cpuCol[i];
+    }
+
+    tn->tupleSize = table->tupleSize;
+    tn->tupleNum = totalTupleNum;
+    
+    struct scanNode sn;
+    sn.tn = tn;
+    sn.whereAttrNum = node->plan.whereNum;
 
     /*
-     * Release the OpenCL unnessceary memory.
+     * FIXME: currently we don't support complex where conditions
+     */
+
+    assert(node->plan.whereNum == 1);
+
+    int * attr = (int*)palloc(sizeof(int)* table->attrNum);
+    memset(attr,0,sizeof(int) * table->attrNum);
+
+    countWhereAttr(node->plan.whereexpr[0], attr, table->attrNum);
+
+    index = 0;
+    for(i=0;i<table->attrNum;i++){
+        if(attr[i] != 0)
+            index ++;
+    }
+    
+    sn.whereIndex = (int*)palloc(sizeof(int) * index);
+    sn.outputIndex = (int*)palloc(sizeof(int) * node->plan.attrNum);
+
+    index = 0;
+    setupGpuWhere(&index, node, &sn, node->plan.whereexpr[0]);
+
+    tnRes = tableScan(&sn,&context,&pp);
+
+    for(i = 0; i<node->plan.attrNum;i++){
+        table->gpuCol[i] = tnRes->content[i];
+    }
+
+
+    /*
+     * Release the unused OpenCL memory
      */ 
 
 }

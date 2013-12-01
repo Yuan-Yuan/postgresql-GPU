@@ -11,6 +11,7 @@
 #include "utils/datum.h"
 #include "utils/builtins.h"
 #include "catalog/pg_type.h"
+#include "mb/pg_wchar.h"
 #include "gpu/gpu.h"
 
 
@@ -126,9 +127,15 @@ static int pgtypeToGPUType(int typid){
             break;
 
         case FLOAT4OID:
+            gputype = GPU_FLOAT;
+            break;
+
         case FLOAT8OID:
+            gputype = GPU_DOUBLE;
+            break;
+
         case NUMERICOID:
-            gputype = GPU_DECIMAL;
+            gputype = GPU_NUMERIC;
             break;
 
         case TEXTOID:
@@ -145,42 +152,6 @@ static int pgtypeToGPUType(int typid){
     }
 
     return gputype;
-}
-
-/*
- * Return the length of a given typid.
- * For fixed-length type, get_typlen() will return the length of the type.
- * For variable-length type, we will return its maximum length.
- */
-
-static inline int pgtypeLength(int typid, int typmod){
-
-/*
- * FIXME: how to handle different character representions
- */
-
-    int length = -1;
-
-    switch(typid){
-
-        case BPCHAROID:
-        case VARCHAROID:
-        case NUMERICOID:
-            length = type_maximum_size(typid,typmod) - VARHDRSZ;
-            length /= pg_encoding_max_length(GetDatabaseEncoding());
-            break;
-
-        case TIMESTAMPOID:
-        case INT4OID:
-            length = get_typlen(typid);
-            break;
-
-        default:
-            printf("Typid:%d not supported yet!\n",typid);
-            break;
-    }
-
-    return length;
 }
 
 /*
@@ -490,8 +461,11 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
     List * qual = scanstate->ps.plan->qual;
     ListCell *l;
     int i, k, *attrArray, usedAttr;
+    int typid, typmod, attrlen;
+    int tupleSize = 0;
 
     scannode = (struct gpuScanNode*)palloc(sizeof(struct gpuScanNode));
+    scannode->scanPos = 0;
     scannode->plan.type = GPU_SCAN;
     scannode->plan.leftPlan = NULL;
     scannode->plan.rightPlan = NULL;
@@ -504,22 +478,62 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
     scannode->plan.table.attrNum = get_relnatts(scannode->plan.table.tid);
     scannode->plan.table.attrType = (int*)palloc(sizeof(int)*scannode->plan.table.attrNum);
     scannode->plan.table.attrSize = (int*)palloc(sizeof(int)*scannode->plan.table.attrNum);
+    scannode->plan.table.variLen = (int*)palloc(sizeof(int)*scannode->plan.table.attrNum);
+    scannode->plan.table.indexIndirect = (int*)palloc(sizeof(int)*scannode->plan.table.attrNum);
     attrArray = (int *)palloc(sizeof(int)*scannode->plan.table.attrNum);
 
     /* The postgresql attrNum starts from 1 */
 
     for(i=1;i<=scannode->plan.table.attrNum;i++){
-        int typid = get_atttype(scannode->plan.table.tid, i);
-        int typmod = get_atttypmod(scannode->plan.table.tid,i);
+        typid = get_atttype(scannode->plan.table.tid, i);
+        typmod = get_atttypmod(scannode->plan.table.tid,i);
 
-        /*
-         * if the attrSize is -1, this means this is a variable length data.
-         */ 
+        switch(typid){
 
-        scannode->plan.table.attrSize[i-1] = pgtypeLength(typid,typmod); 
+            case BPCHAROID:
+                attrlen = type_maximum_size(typid,typmod) - VARHDRSZ;
+                attrlen /= pg_encoding_max_length(GetDatabaseEncoding());
+                scannode->plan.table.variLen[i-1] = 0;
+                break;
+
+            case VARCHAROID:
+                attrlen = type_maximum_size(typid,typmod) - VARHDRSZ;
+                attrlen /= pg_encoding_max_length(GetDatabaseEncoding());
+                scannode->plan.table.variLen[i-1] = 1;
+                break;
+
+            /*
+             * FIXME: how to decide the length of numeric and how is it represented.
+             */ 
+
+            case NUMERICOID:
+                attrlen = type_maximum_size(typid,typmod) - VARHDRSZ;
+                attrlen /= pg_encoding_max_length(GetDatabaseEncoding());
+                scannode->plan.table.variLen[i-1] = 1;
+                break;
+
+            case TIMESTAMPOID:
+            case INT4OID:
+            case FLOAT4OID:
+            case FLOAT8OID:
+                attrlen = get_typlen(typid);
+                scannode->plan.table.variLen[i-1] = 0;
+                break;
+
+            default:
+                printf("Typid:%d not supported yet!\n",typid);
+                break;
+     
+        }
+
+        tupleSize += attrlen;
+        scannode->plan.table.attrSize[i-1] = attrlen; 
         scannode->plan.table.attrType[i-1] = pgtypeToGPUType(typid);
         attrArray[i-1] = -1;
+        scannode->plan.table.indexIndirect[i-1] = -1;
     }
+
+    scannode->plan.table.tupleSize = tupleSize;
 
     assert(pi != NULL);
 
@@ -596,9 +610,13 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
     scannode->plan.table.attrIndex = (int *)palloc(sizeof(int)*usedAttr);
     for(i=0, k = 0; i < scannode->plan.table.attrNum; i++){
         if(attrArray[i] != -1){
+            scannode->plan.table.indexIndirect[i] = k;
             scannode->plan.table.attrIndex[k++] = i; 
         }
     }
+
+    scannode->plan.table.cpuCol = (char*)palloc(sizeof(char*)*usedAttr);
+    scannode->plan.table.gpuCol = (cl_mem*)palloc(sizeof(cl_mem)*usedAttr);
 
     return scannode;
 }
@@ -910,8 +928,8 @@ static void gpuFreeScan(struct gpuScanNode * node){
 
     /* FIXME: release of other table meta data */
 
-    clReleaseMemObject(node->plan.table.memory);
-    clReleaseMemObject(node->plan.table.gpuMemory);
+    //clReleaseMemObject(node->plan.table.memory);
+    //clReleaseMemObject(node->plan.table.gpuMemory);
 
     //pfree(node);
 }

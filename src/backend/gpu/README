@@ -39,10 +39,10 @@ Some notes on current implementation (will be updated based on the process):
         int4
         time stamp without time zone
         BpChar, with a fixed length of header
-        numeric, the length is the scale and with a fixed length of header.
 
    variable length data: 
         varchar
+        numeric
 
 There may be duplicated codes in the current implementation. we will keep refining the codes all the time.
 
