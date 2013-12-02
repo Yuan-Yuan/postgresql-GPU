@@ -235,7 +235,6 @@ static void gpuInitOpExpr(struct gpuOpExpr * gpuopexpr, OpExpr *opexpr, int * at
 
     l = l->next;
     gpuopexpr->right = gpuExprInit((Expr*)lfirst(l),attrArray);
-    gpuopexpr->expr.type = GPU_OPEXPR;
 
     printf("Expression type T_OpExpr\n");
 
@@ -341,7 +340,7 @@ static struct gpuExpr* gpuExprInit(Expr *cpuExpr, int *attrArray){
 
 static struct gpuExpr ** gpuWhere(Expr * expr, int * attrArray){
 
-    struct gpuExpr ** gpuexpr = NULL;
+    struct gpuExpr ** gpuexpr = (struct gpuExpr **)palloc(sizeof(struct gpuExpr *));;
     ListCell *l;
     int i = 0;
 
@@ -359,7 +358,7 @@ static struct gpuExpr ** gpuWhere(Expr * expr, int * attrArray){
                     gpuboolexpr->args[i] = *(gpuWhere((Expr*)lfirst(l), attrArray));
                     i+=1;
                 }
-                gpuexpr = (struct gpuExpr **)&gpuboolexpr;
+                *gpuexpr = (struct gpuExpr *)gpuboolexpr;
                 break;
             }
 
@@ -396,7 +395,7 @@ static struct gpuExpr ** gpuWhere(Expr * expr, int * attrArray){
                     gpuboolexpr->args[i] = *gpuWhere((Expr*)lfirst(l),attrArray);
                 }
 
-                gpuexpr = (struct gpuExpr**)&gpuboolexpr;
+                *gpuexpr = (struct gpuExpr*)gpuboolexpr;
                 break;
             }
 
@@ -407,7 +406,7 @@ static struct gpuExpr ** gpuWhere(Expr * expr, int * attrArray){
 
                 gpuInitOpExpr(gpuopexpr, opexpr, attrArray);
 
-                gpuexpr = (struct gpuExpr **)&gpuopexpr;
+                *gpuexpr = (struct gpuExpr *)gpuopexpr;
                 break;
             }
 
@@ -418,7 +417,7 @@ static struct gpuExpr ** gpuWhere(Expr * expr, int * attrArray){
 
                 gpuInitVarExpr(gpuvar, var);
 
-                gpuexpr = (struct gpuExpr **)&gpuvar;
+                *gpuexpr = (struct gpuExpr *)gpuvar;
                 break;
             }
 
@@ -429,7 +428,7 @@ static struct gpuExpr ** gpuWhere(Expr * expr, int * attrArray){
 
                 gpuInitConstExpr(gpuconst, cpuconst);
 
-                gpuexpr = (struct gpuExpr **)&gpuconst;
+                *gpuexpr = (struct gpuExpr *)gpuconst;
                 break;
             }
 

@@ -16,7 +16,7 @@
  * countWhereAttr: given a whereExpr in plan node, count how many attributes are used
  */
 
-static void countWhereAttr(struct gpuExpr * expr, int *attr, int n){
+static void countWhereAttr(struct gpuExpr * expr, int *attr, int* exprCount){
     int i;
 
     switch(expr->type){
@@ -26,10 +26,11 @@ static void countWhereAttr(struct gpuExpr * expr, int *attr, int n){
             {
                 struct gpuBoolExpr * boolexpr = (struct gpuBoolExpr*)expr;
                 for(i = 0;i<boolexpr->argNum;i++){
-                    countWhereAttr(boolexpr->args[i], attr, n);
+                    countWhereAttr(boolexpr->args[i], attr, exprCount);
                 }
                 break;
             }
+
         case GPU_GT:
         case GPU_GEQ:
         case GPU_EQ:
@@ -37,10 +38,21 @@ static void countWhereAttr(struct gpuExpr * expr, int *attr, int n){
         case GPU_LT:
             {
                 struct gpuOpExpr *opexpr = (struct gpuOpExpr*)expr;
-                countWhereAttr(opexpr->left, attr,n);
-                countWhereAttr(opexpr->right, attr,n);
+                *exprCount = * exprCount + 1;
+                countWhereAttr(opexpr->left, attr, exprCount);
+                countWhereAttr(opexpr->right, attr,exprCount);
                 break;
             }
+
+        case GPU_VAR:
+            {
+                struct gpuVar * var = (struct gpuVar *)expr;
+                attr[var->index] = 1;
+                break;
+            }
+
+        case GPU_CONST:
+            return;
 
         default:
             printf("GPU where expression type not supported yet:%d\n", expr->type);
@@ -50,10 +62,13 @@ static void countWhereAttr(struct gpuExpr * expr, int *attr, int n){
 }
 
 /*
- * Setup the whereExp in scanNode based on gpuExpr
+ * Setup the whereExp in scanNode based on gpuExpr.
+ * @index: points to the whereExp that need to be initialized.
+ * @sn: the scanNode structure that controls scan execution on GPU
+ * @expr: input expr from query plan tree
  */
 
-static void setupGpuWhere(int * index, struct gpuScanNode *node, struct scanNode *sn, struct gpuExpr * expr ){
+static void setupGpuWhere(int * index, struct scanNode *sn, struct gpuExpr * expr ){
     int i;
 
     switch(expr->type){
@@ -63,16 +78,33 @@ static void setupGpuWhere(int * index, struct gpuScanNode *node, struct scanNode
             {
                 struct gpuBoolExpr * boolexpr = (struct gpuBoolExpr*)expr;
                 for(i = 0;i<boolexpr->argNum;i++){
-                    ;
+                    setupGpuWhere(index, sn, boolexpr->args[i]);
+                    *index = *index + 1;
                 }
                 break;
             }
+
+        /*
+         * FIXME: we assume that the where condition is in the format var =const format.
+         * More complex where expressions are not supported yet.
+         */ 
+
         case GPU_GT:
+            sn->filter->exp[*index].relation = GTH;
         case GPU_GEQ:
+            sn->filter->exp[*index].relation = GEQ;
         case GPU_EQ:
+            sn->filter->exp[*index].relation = EQ;
         case GPU_LEQ:
+            sn->filter->exp[*index].relation = LEQ;
         case GPU_LT:
+            sn->filter->exp[*index].relation = LTH;
             {
+                struct gpuOpExpr * opexpr = (struct gpuOpExpr*)expr;
+                struct gpuVar * var = (struct gpuVar*)opexpr->left;
+                struct gpuConst * gpuconst = (struct gpuConst*)opexpr->right;
+                sn->whereIndex[*index] = var->index;
+                memcpy(sn->filter->exp[*index].content, gpuconst->value, gpuconst->length);
                 break;
             }
 
@@ -80,6 +112,14 @@ static void setupGpuWhere(int * index, struct gpuScanNode *node, struct scanNode
             printf("GPU where expression type not supprted yet:%d\n",expr->type);
             break;
     }
+}
+
+/*
+ * Setup the output information for executing queries on GPUs
+ */
+
+static void setupGpuOutput(){
+
 }
 
 /*
@@ -240,31 +280,41 @@ static void gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
     
     struct scanNode sn;
     sn.tn = tn;
-    sn.whereAttrNum = node->plan.whereNum;
+    sn.outputIndex = (int*)palloc(sizeof(int) * node->plan.attrNum);
 
     /*
-     * FIXME: currently we don't support complex where conditions
+     * FIXME: currently we don't support complex where conditions.
+     * We only support variable = const format.
      */
 
-    assert(node->plan.whereNum <= 1);
-
-    int * attr = (int*)palloc(sizeof(int)* table->attrNum);
-    memset(attr,0,sizeof(int) * table->attrNum);
 
     if(node->plan.whereNum != 0){
 
-        countWhereAttr(node->plan.whereexpr[0], attr, table->attrNum);
-        for(i=0, index = 0;i<table->attrNum;i++){
+        int attrCount = 0, exprCount = 0;
+        int * attr = (int*)palloc(sizeof(int)* table->attrNum);
+        memset(attr,0,sizeof(int) * table->attrNum);
+
+        countWhereAttr(node->plan.whereexpr[0], attr, &exprCount);
+
+        for(i=0;i<table->attrNum;i++){
             if(attr[i] != 0)
-                index ++;
+                attrCount ++;
         }
+
+        sn.whereAttrNum = attrCount;
+
+        sn.whereIndex = (int*)palloc(sizeof(int) * attrCount);
+
+        sn.filter = (struct whereCondition*)palloc(sizeof(struct whereCondition));
+        sn.filter->nested = 0;
+        sn.filter->expNum = exprCount;
+        sn.filter->exp = (struct whereExp *)malloc(sizeof(struct whereExp) * exprCount);
+
+        index = 0;
+        setupGpuWhere(&index, &sn, node->plan.whereexpr[0]);
     }
 
-    sn.whereIndex = (int*)palloc(sizeof(int) * index);
-    sn.outputIndex = (int*)palloc(sizeof(int) * node->plan.attrNum);
-
-    index = 0;
-    setupGpuWhere(&index, node, &sn, node->plan.whereexpr[0]);
+    setupGpuOutput();
 
     tnRes = tableScan(&sn,&context,&pp);
 
