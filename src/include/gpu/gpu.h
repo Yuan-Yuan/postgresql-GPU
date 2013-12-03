@@ -27,7 +27,7 @@ struct gpuTable{
     int *attrSize;      /* Size of each column */
     int *variLen;       /* whether the attribute is a variable length column */
 
-    int tupleSize;      
+    int tupleSize;
 
     int usedAttr;       /* Number of columns that will be used in the query */
     int *attrIndex;     /* the index of each used column */
@@ -59,7 +59,7 @@ struct gpuVar{
 
 struct gpuConst{
     struct gpuExpr expr;    /* the general expression */
-    int type;           /* type of the const */
+    int type;               /* type of the const */
     int length;             /* legnth of the const */
     char *value;            /* point to the memory space where the const value is stored */
 };

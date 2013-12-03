@@ -283,11 +283,16 @@ static struct gpuExpr* gpuExprInit(Expr *cpuExpr, int *attrArray){
         case T_Var:
             {
                 Var * var = (Var *)cpuExpr;
+
                 struct gpuVar * gpuvar = (struct gpuVar*)palloc(sizeof(struct gpuVar));
                 gpuInitVarExpr(gpuvar, var);
 
                 if(attrArray)
                     attrArray[gpuvar->index] = 1;
+
+                if(var->varno == OUTER_VAR){
+                    gpuvar->index = -gpuvar->index; 
+                }
 
                 gpuexpr = (struct gpuExpr *)gpuvar;
                 break;
@@ -417,6 +422,9 @@ static struct gpuExpr ** gpuWhere(Expr * expr, int * attrArray){
 
                 gpuInitVarExpr(gpuvar, var);
 
+                if(var->varno == OUTER_VAR)
+                    gpuvar->index = - gpuvar->index;
+
                 *gpuexpr = (struct gpuExpr *)gpuvar;
                 break;
             }
@@ -501,17 +509,15 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
                 scannode->plan.table.variLen[i-1] = 1;
                 break;
 
-            /*
-             * FIXME: how to decide the length of numeric and how is it represented.
-             */ 
-
             case NUMERICOID:
                 attrlen = sizeof(float); 
                 scannode->plan.table.variLen[i-1] = 1;
                 break;
 
             case TIMESTAMPOID:
+            case INT2OID:
             case INT4OID:
+            case INT8OID:
             case FLOAT4OID:
             case FLOAT8OID:
                 attrlen = get_typlen(typid);
@@ -566,8 +572,6 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
          */
             continue;
         }
-
-        /* FIXME: support of complex expressions */
 
         targetlist[te->resno - 1] = gpuExprInit(te->expr,attrArray);
 
@@ -651,7 +655,7 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate, int *nodeNum){
 
     /*
      * Count the number of projected results,
-     */ 
+     */
 
     k = 0;
     foreach(l,pi->pi_targetlist){
@@ -662,9 +666,36 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate, int *nodeNum){
         k++;
     }
 
-
     for(i=0;i<pi->pi_numSimpleVars;i++){
-        /* FIXME: decide left or right or junk */
+
+        /*
+         * Decide left or right or junk 
+         * Using varSlotsOffsets to decide whether an attribute is from left child or right child.
+         * If the index is larger than the largest index, then it is a junk entry.
+         *
+         * innertuple is left child and outer tuple is right child.
+         */
+
+        if(pi->pi_varSlotOffsets[i] == offsetof(ExprContext,ecxt_innertuple)){
+
+            /*
+             * This var comes from the left child.
+             * varNumbers start from 1, not 0.
+             */
+
+            if(pi->pi_varNumbers[i] <= leftAttrNum)
+                k++;
+
+        }else{
+
+            /*
+             * This var coms from the right child.
+             * varNumbers start from 1, not 0.
+             */ 
+
+            if(pi->pi_varNumbers[i] <= rightAttrNum)
+                k++;
+        }
     }
 
     joinnode->plan.attrNum = k;
@@ -686,19 +717,37 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate, int *nodeNum){
             continue;
         }
 
-        targetlist[te->resno] = gpuExprInit(te->expr, NULL);
-
+        targetlist[te->resno - 1] = gpuExprInit(te->expr, NULL);
     }
 
     for(i = 0;i<pi->pi_numSimpleVars;i++){
-        int offset = pi->pi_varOutputCols[i];
-        struct gpuVar *gvar = (struct gpuVar*)palloc(sizeof(struct gpuVar));
+        int offset = pi->pi_varOutputCols[i] - 1;
 
-        /* FIXME: decide left or right or junk */
+        if(pi->pi_varSlotOffsets[i] == offsetof(ExprContext,ecxt_innertuple)){
 
-        gvar->expr.type = GPU_VAR;
-        gvar->index = pi->pi_varNumbers[i];
-        targetlist[offset] = (struct gpuExpr *) gvar;
+            if(pi->pi_varNumbers[i] > leftAttrNum){
+                continue;
+            }
+
+            struct gpuVar *gvar = (struct gpuVar*)palloc(sizeof(struct gpuVar));
+            gvar->expr.type = GPU_VAR;
+            gvar->index = pi->pi_varNumbers[i] - 1;
+            targetlist[offset] = (struct gpuExpr *) gvar;
+
+        }else{
+
+            if(pi->pi_varNumbers[i] <= rightAttrNum){
+                continue;
+            }
+
+            struct gpuVar *gvar = (struct gpuVar*)palloc(sizeof(struct gpuVar));
+            gvar->expr.type = GPU_VAR;
+            gvar->index = pi->pi_varNumbers[i] - 1;
+            gvar->index = - gvar->index;
+            targetlist[offset] = (struct gpuExpr *) gvar;
+
+        }
+
     }
 
     joinnode->plan.targetlist = targetlist;
@@ -721,6 +770,7 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate, int *nodeNum){
             ExprState * es = (ExprState*)lfirst(l);
             joinnode->joinexpr = gpuWhere(es->expr, NULL);
         }
+
     }else{
         joinnode->joinNum = 0;
         joinnode->joinexpr = NULL;
@@ -955,12 +1005,6 @@ static struct gpuPlan * gpuInitPlan(PlanState *planstate, int * nodeNum){
 
     switch(nodeTag(planstate)){
 
-        /*
-         * Scan node: current we do not distinguish different scan nodes.
-         * FIXME: we needto handle different scan nodes to get the qual exprs.
-         * For example, a simple scan query with where predicate, the quals may be in index qual and ps.qual.
-         */ 
-        case T_SeqScanState:
         case T_IndexScanState:
         case T_IndexOnlyScanState:
         case T_BitmapHeapScanState:
@@ -972,18 +1016,23 @@ static struct gpuPlan * gpuInitPlan(PlanState *planstate, int * nodeNum){
         case T_WorkTableScanState:
         case T_ForeignScanState:
             {
+                printf("Only Sequential scan plan is supported when executing on GPUs:%d\n",nodeTag(planstate));
+                break;
+            }
+        case T_SeqScanState:
+            {
                 *nodeNum = *nodeNum + 1;
                 result = (struct gpuPlan*) gpuInitScan(planstate);
                 break;
             }
 
-        /*
-         * Join node: current we do not distinguish different join nodes.
-         */
-
-        case T_NestLoopState:
         case T_MergeJoinState:
         case T_HashJoinState:
+            {
+                printf("Only nested loop join plan is supported when executing on GPUs:%d\n",nodeTag(planstate));
+                break;
+            }
+        case T_NestLoopState:
             {
                 result = (struct gpuPlan*) gpuInitJoin(planstate, nodeNum);
                 break;
@@ -1022,9 +1071,6 @@ static struct gpuPlan * gpuInitPlan(PlanState *planstate, int * nodeNum){
                 result = (struct gpuPlan *)gpuInitPlan(outerPlanState(planstate), nodeNum);
                 break;
             }
-
-
-        /* FIXME: support other query operations */
 
         default:
             printf("Query node type not supported yet:%d\n",nodeTag(planstate));

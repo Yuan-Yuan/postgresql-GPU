@@ -114,13 +114,6 @@ static void setupGpuWhere(int * index, struct scanNode *sn, struct gpuExpr * exp
     }
 }
 
-/*
- * Setup the output information for executing queries on GPUs
- */
-
-static void setupGpuOutput(){
-
-}
 
 /*
  * Execute SCAN opeartion on GPU.
@@ -280,13 +273,14 @@ static void gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
     
     struct scanNode sn;
     sn.tn = tn;
+    sn.outputNum = node->plan.attrNum;
     sn.outputIndex = (int*)palloc(sizeof(int) * node->plan.attrNum);
+    sn.keepInGpu = 1;
 
     /*
      * FIXME: currently we don't support complex where conditions.
      * We only support variable = const format.
      */
-
 
     if(node->plan.whereNum != 0){
 
@@ -294,6 +288,7 @@ static void gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
         int * attr = (int*)palloc(sizeof(int)* table->attrNum);
         memset(attr,0,sizeof(int) * table->attrNum);
 
+        sn.hasWhere = 1;
         countWhereAttr(node->plan.whereexpr[0], attr, &exprCount);
 
         for(i=0;i<table->attrNum;i++){
@@ -314,7 +309,22 @@ static void gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
         setupGpuWhere(&index, &sn, node->plan.whereexpr[0]);
     }
 
-    setupGpuOutput();
+    for(i=0;i<node->plan.attrNum;i++){
+        struct gpuExpr * expr = node->plan.targetlist[i];
+
+        switch(expr->type){
+            case GPU_VAR:
+                {
+                    struct gpuVar * var = (struct gpuVar*)expr;
+                    sn.outputIndex[i] = node->plan.table.indexIndirect[var->index];
+                    break;
+                }
+
+            default:
+                printf("GPU output expression not supported yet!\n");
+                break;
+        }
+    }
 
     tnRes = tableScan(&sn,&context,&pp);
 
@@ -433,6 +443,8 @@ void gpuExec(QueryDesc * querydesc){
     struct gpuQueryDesc * gpuquerydesc = context->querydesc;
     struct gpuPlan ** execQueue = NULL;
     int queueIndex = 0, i;
+
+    return;
 
     execQueue = (struct gpuPlan **)palloc(sizeof(struct gpuPlan*)*gpuquerydesc->nodeNum);
 
