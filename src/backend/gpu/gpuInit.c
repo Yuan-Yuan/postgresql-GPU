@@ -11,6 +11,7 @@
 #include "utils/datum.h"
 #include "utils/builtins.h"
 #include "catalog/pg_type.h"
+#include "storage/bufmgr.h"
 #include "mb/pg_wchar.h"
 #include "gpu/gpu.h"
 
@@ -135,7 +136,7 @@ static int pgtypeToGPUType(int typid){
             break;
 
         case NUMERICOID:
-            gputype = GPU_FLOAT;
+            gputype = GPU_DOUBLE;
             break;
 
         case TEXTOID:
@@ -481,8 +482,14 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
      * Initialize the scan table info.
      */ 
 
-    scannode->plan.table.tid = RelationGetRelid(scanstate->ss_currentRelation);
-    scannode->plan.table.attrNum = get_relnatts(scannode->plan.table.tid);
+    scannode->tid = RelationGetRelid(scanstate->ss_currentRelation);
+
+    Relation r = RelationIdGetRelation(scannode->tid);
+    scannode->blockNum = RelationGetNumberOfBlocks(r); 
+
+    RelationClose(r);
+
+    scannode->plan.table.attrNum = get_relnatts(scannode->tid);
     scannode->plan.table.attrType = (int*)palloc(sizeof(int)*scannode->plan.table.attrNum);
     scannode->plan.table.attrSize = (int*)palloc(sizeof(int)*scannode->plan.table.attrNum);
     scannode->plan.table.variLen = (int*)palloc(sizeof(int)*scannode->plan.table.attrNum);
@@ -492,8 +499,8 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
     /* The postgresql attrNum starts from 1 */
 
     for(i=1;i<=scannode->plan.table.attrNum;i++){
-        typid = get_atttype(scannode->plan.table.tid, i);
-        typmod = get_atttypmod(scannode->plan.table.tid,i);
+        typid = get_atttype(scannode->tid,i);
+        typmod = get_atttypmod(scannode->tid,i);
 
         switch(typid){
 
@@ -510,7 +517,7 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
                 break;
 
             case NUMERICOID:
-                attrlen = sizeof(float); 
+                attrlen = sizeof(double); 
                 scannode->plan.table.variLen[i-1] = 1;
                 break;
 
@@ -633,6 +640,7 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate, int *nodeNum){
 
     struct gpuJoinNode *joinnode = NULL;
     JoinState * joinstate = (JoinState *) planstate;
+    int tupleSize = 0;
 
     ProjectionInfo *pi = joinstate->ps.ps_ProjInfo;
     struct gpuExpr **targetlist = NULL;
@@ -700,11 +708,15 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate, int *nodeNum){
 
     joinnode->plan.attrNum = k;
 
+    joinnode->plan.attrType = (int*)palloc(sizeof(int)*k);
+    joinnode->plan.attrSize = (int*)palloc(sizeof(int)*k);
+
     /*
      * Initialize the target list.
+     * FIXME: initialize type and size.
      */
 
-    targetlist = (struct gpuExpr **) palloc(sizeof(struct gpuExpr *) * joinnode->plan.attrNum);
+    targetlist = (struct gpuExpr **) palloc(sizeof(struct gpuExpr*)*k);
 
     foreach(l, pi->pi_targetlist){
         GenericExprState * gestate = (GenericExprState *) lfirst(l);
@@ -712,12 +724,12 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate, int *nodeNum){
         if(nodeTag(te->expr) == T_Var){
 
         /*
-         * This means this is a junk entry.
+         * This means this is a junk entry
          */
             continue;
         }
 
-        targetlist[te->resno - 1] = gpuExprInit(te->expr, NULL);
+        targetlist[te->resno-1] = gpuExprInit(te->expr, NULL);
     }
 
     for(i = 0;i<pi->pi_numSimpleVars;i++){
@@ -790,6 +802,7 @@ static struct gpuAggNode * gpuInitAgg(struct PlanState * planstate, int * nodeNu
     Agg * node = (Agg*) aggstate->ss.ps.plan;
     ListCell *l;
     int i;
+    int tupleSize = 0;
 
     *nodeNum = *nodeNum + 1;
     aggnode = (struct gpuAggNode*)palloc(sizeof(struct gpuAggNode));

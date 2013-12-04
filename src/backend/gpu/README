@@ -42,7 +42,7 @@ Some notes on current implementation (will be updated based on the process):
 
    variable length data: 
         varchar
-        numeric
+        numeric : numeric data is stored in Numeric format.
 
 There may be duplicated codes in the current implementation. we will keep refining the codes all the time.
 

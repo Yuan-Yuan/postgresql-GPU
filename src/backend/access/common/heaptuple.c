@@ -60,6 +60,8 @@
 #include "access/sysattr.h"
 #include "access/tuptoaster.h"
 #include "executor/tuptable.h"
+#include "utils/numeric.h"
+#include "utils/builtins.h"
 
 
 /* Does att's datatype allow packing into the 1-byte-header varlena format? */

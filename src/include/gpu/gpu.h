@@ -19,15 +19,13 @@ struct gpuTable{
      * Table meta data will be initialized in query execution step.
      */
 
-    int tid;            /* relation id to find the table data */
-
-    long blockNum;      /* Number of blocks in the table */
     int attrNum;        /* Number of columns in the table */
     int *attrType;      /* Type of each column */
     int *attrSize;      /* Size of each column */
     int *variLen;       /* whether the attribute is a variable length column */
 
     int tupleSize;
+    int tupleNum;       /* Number of tuples to process */
 
     int usedAttr;       /* Number of columns that will be used in the query */
     int *attrIndex;     /* the index of each used column */
@@ -116,6 +114,9 @@ struct gpuPlan{
     int type;                               /* the type of the current node */
 
     int attrNum;                            /* the total number of projected attrs */
+    int *attrSize;                          /* size of each projected attrs */
+    int *attrType;                          /* type of each projected attrs */
+
     struct gpuExpr **  targetlist;          /* all the projected results */
     int whereNum;                           /* length of where expression list */
     struct gpuExpr **whereexpr;             /* for where conditions */
@@ -126,6 +127,8 @@ struct gpuPlan{
 
 struct gpuScanNode{
     struct gpuPlan plan;            /* points to the query plan */
+    int tid;                        /* relation id to find the table data */
+    long blockNum;                  /* Number of blocks in the table */
     int scanPos;                    /* starting page of the scan */
 };
 

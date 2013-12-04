@@ -6,6 +6,7 @@
 #include "access/htup_details.h"
 #include "storage/bufmgr.h"
 #include "utils/tqual.h"
+#include "utils/builtins.h"
 #include "gpu/gpu.h"
 
 #include "gpu/common.h"
@@ -118,17 +119,22 @@ static void setupGpuWhere(int * index, struct scanNode *sn, struct gpuExpr * exp
 /*
  * Execute SCAN opeartion on GPU.
  * Need to handle MVCC check and Serialization check when getting tuples from the storage.
+ *
+ * Return: 0 means more data need processing.
+ *         1 means all data have been processed.
  */
 
-static void gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
+static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
 
     int i = 0, j = 0, k = 0;
-    int relid = node->plan.table.tid;
+    int relid = node->tid;
     int nattr = node->plan.attrNum;
     int attrLen = 0, attrIndex = 0;
     long tupleNum = 0, totalTupleNum = 0;
     int index, offset = 0, tupleSize = 0;
     struct gpuTable * table = &(node->plan.table);
+    int res = 1;
+    int blockNum;
 
     HeapTupleData tupledata;
     ItemId lpp;
@@ -140,18 +146,25 @@ static void gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
     cl_int error = 0;
     void * clTmp;
 
-
     tupleSize = table->tupleSize;
     Relation r = RelationIdGetRelation(relid);
-    BlockNumber bln = RelationGetNumberOfBlocks(r);
 
     /*
      * Calculate table size.
      * Allocate the needed memory using CL_MEM_ALLOC_HOST_PTR flag.
      */
 
-    table->blockNum = bln;
-    tupleNum = (bln * BLCKSZ + tupleSize)/ tupleSize;
+    BlockNumber bln = node->blockNum;
+
+    if(node->scanPos + BLOCK > bln){
+        blockNum = bln - node->scanPos;
+        res = 1;
+    }else{
+        blockNum = BLOCK;
+        res = 0;
+    }
+
+    tupleNum = (blockNum * BLCKSZ + tupleSize) / tupleSize;
 
     /*
      * FIXME: how to determine the size of the allocated space.
@@ -176,7 +189,7 @@ static void gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
      *  3) optimize MVCC check and serialization check conditions.
      */
 
-    for(i=0, offset= 0, totalTupleNum = 0; i<bln; i++){
+    for(i=node->scanPos, totalTupleNum = 0; i<blockNum; i++){
         buffer = ReadBuffer(r,i);
         LockBuffer(buffer, BUFFER_LOCK_SHARE);
         page = BufferGetPage(buffer);
@@ -205,21 +218,35 @@ static void gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
                     offset = tupledata.t_data->t_hoff, attrIndex = 0;
 
                     for(j = 0; j < nattr; j ++){
+                        char * tp = (char*)tupledata.t_data + offset;
+
                         if(j == table->attrIndex[attrIndex]){
 
                             if(table->variLen[j] == 1){
-                                memcpy(table->cpuCol[attrIndex] + totalTupleNum *table->attrSize[j], (char*)tupledata.t_data+offset, VARSIZE_ANY((char*)tupledata.t_data+offset));
-                                offset += VARSIZE_ANY(((char*)tupledata.t_data + offset));
+
+                                /*
+                                 * For variable length data, it may be varchar or numeric.
+                                 * We check the attrType.
+                                 * If it is double, it means the type is numeric.
+                                 */ 
+
+                                if(table->attrType[j] == GPU_DOUBLE){
+                                    double value = DatumGetFloat8(DirectFunctionCall1(numeric_float8_no_overflow, PointerGetDatum(tp)));
+                                    memcpy(table->cpuCol[attrIndex] + totalTupleNum*table->attrSize[j] , &value, sizeof(double));
+
+                                }else{
+                                    memcpy(table->cpuCol[attrIndex] + totalTupleNum *table->attrSize[j], tp, VARSIZE_ANY(tp));
+                                }
+
                             }else{
-                                memcpy(table->cpuCol[attrIndex] + totalTupleNum * table->attrSize[j], (char*)tupledata.t_data + offset, table->attrSize[j]);
-                                offset += table->attrSize[j];
+                                memcpy(table->cpuCol[attrIndex] + totalTupleNum * table->attrSize[j], tp, table->attrSize[j]);
                             }
 
                             attrIndex ++ ;
                         }
 
                         if(node->plan.table.variLen[j] == 1){
-                            offset += VARSIZE_ANY(((char*)tupledata.t_data + offset));
+                            offset += VARSIZE_ANY(tp);
                         }else{
                             offset += node->plan.table.attrSize[j];
                         }
@@ -235,6 +262,8 @@ static void gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
     }
 
     RelationClose(r);
+
+    node->plan.table.tupleNum = totalTupleNum;
 
     /*
      * Execute the Scan query on GPU.
@@ -332,55 +361,90 @@ static void gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
         table->gpuCol[i] = tnRes->content[i];
     }
 
+    /*
+     * Release the unused OpenCL memory
+     */ 
+
+    return res;
+
+}
+
+static int gpuExecuteJoin(struct gpuJoinNode * node, QueryDesc * querydesc){
+    int res = 1;
+
+    int i = 0, j = 0, k = 0;
+    int nattr = node->plan.attrNum;
+    int attrLen = 0, attrIndex = 0;
+    long tupleNum = 0, totalTupleNum = 0;
+    int index, offset = 0, tupleSize = 0;
+    struct gpuTable * table = &(node->plan.table);
+    int blockNum;
+
+    HeapTupleData tupledata;
+    ItemId lpp;
+    Buffer buffer;
+    Page page;
+    PageHeader ph;
+
+    struct clContext * context = querydesc->context;
+    cl_int error = 0;
+    void * clTmp;
+
+    tupleSize = table->tupleSize;
 
     /*
      * Release the unused OpenCL memory
      */ 
 
+    return res;
 }
 
-static void gpuExecuteJoin(struct gpuJoinNode * joinnode, QueryDesc * querydesc){
+static int gpuExecuteAgg(struct gpuAggNode * aggnode, QueryDesc * querydesc){
 
+    int res = 1;
+    return res;
 }
 
-static void gpuExecuteAgg(struct gpuAggNode * aggnode, QueryDesc * querydesc){
+static int gpuExecuteSort(struct gpuSortNode * sortnode, QueryDesc * querydesc){
 
-}
-
-static void gpuExecuteSort(struct gpuSortNode * sortnode, QueryDesc * querydesc){
-
+    int res = 1;
+    return res;
 }
 
 
 /*
  * gpuExecutePlan: execute the query plan on the GPU device.
+ * Return: 0 the node has more data to process
+ *         1 the node has finished processing all data.
  */
-static void gpuExecutePlan(struct gpuPlan *plan, QueryDesc *querydesc){
+static int gpuExecutePlan(struct gpuPlan *plan, QueryDesc *querydesc){
+
+    int res = 1;
 
     switch(plan->type){
         case GPU_SCAN:
             {
                 struct gpuScanNode * scannode = (struct gpuScanNode *)plan;
-                gpuExecuteScan(scannode, querydesc);
+                res = gpuExecuteScan(scannode, querydesc);
                 break;
             }
 
         case GPU_JOIN:
             {
                 struct gpuJoinNode * joinnode = (struct gpuJoinNode*) plan;
-                gpuExecuteJoin(joinnode, querydesc);
+                res = gpuExecuteJoin(joinnode, querydesc);
                 break;
             }
         case GPU_AGG:
             {
                 struct gpuAggNode * aggnode = (struct gpuAggNode *)plan;
-                gpuExecuteAgg(aggnode, querydesc);
+                res = gpuExecuteAgg(aggnode, querydesc);
                 break;
             }
         case GPU_SORT:
             {
                 struct gpuSortNode * sortnode = (struct gpuSortNode *)plan;
-                gpuExecuteSort(sortnode, querydesc);
+                res = gpuExecuteSort(sortnode, querydesc);
                 break;
             }
 
@@ -388,6 +452,8 @@ static void gpuExecutePlan(struct gpuPlan *plan, QueryDesc *querydesc){
             printf("Query operation not supported yet\n");
             break;
     }
+
+    return res;
 }
 
 /*
@@ -442,16 +508,52 @@ void gpuExec(QueryDesc * querydesc){
     struct clContext * context = querydesc->context;
     struct gpuQueryDesc * gpuquerydesc = context->querydesc;
     struct gpuPlan ** execQueue = NULL;
-    int queueIndex = 0, i;
 
-    return;
+    int queueIndex = 0, i,k, start, finish = 0 , res;
 
     execQueue = (struct gpuPlan **)palloc(sizeof(struct gpuPlan*)*gpuquerydesc->nodeNum);
 
     gpuExecQueue(gpuquerydesc->plan, execQueue, &queueIndex);
 
-    for(i = 0;i<queueIndex;i++){
-        gpuExecutePlan(execQueue[i], querydesc);
+    i = 0, start = 0, k = 0;
+
+    while(1){
+        /*
+         * Currently we consider aggregation and sort as blocking operators.
+         */
+        for(k = start;k< queueIndex;k++){
+            if(execQueue[k]->type == GPU_SORT || execQueue[k]->type == GPU_AGG)
+                break;
+        }
+
+        /*
+         * Each operator only only processes BLOCK pages at most.
+         * This process continues until all the operators finish.
+         */ 
+
+        finish = 1;
+
+        while(1){
+
+            for(i=start;i<k;i++){
+                res = gpuExecutePlan(execQueue[i], querydesc);
+                finish &= res;
+            }
+
+            if(finish == 1)
+                break;
+
+        }
+
+        if(k>= queueIndex)
+            break;
+
+        /*
+         * Executing the blocking operator.
+         */ 
+
+        gpuExecutePlan(execQueue[k], querydesc);
+        start = k + 1;
     }
 
 }
