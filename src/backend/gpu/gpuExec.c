@@ -132,7 +132,7 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
     int attrLen = 0, attrIndex = 0;
     long tupleNum = 0, totalTupleNum = 0;
     int index, offset = 0, tupleSize = 0;
-    struct gpuTable * table = &(node->plan.table);
+    struct gpuTable * table = &(node->table);
     int res = 1;
     int blockNum;
 
@@ -245,10 +245,10 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
                             attrIndex ++ ;
                         }
 
-                        if(node->plan.table.variLen[j] == 1){
+                        if(table->variLen[j] == 1){
                             offset += VARSIZE_ANY(tp);
                         }else{
-                            offset += node->plan.table.attrSize[j];
+                            offset += table->attrSize[j];
                         }
 
                     }
@@ -263,7 +263,7 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
 
     RelationClose(r);
 
-    node->plan.table.tupleNum = totalTupleNum;
+    table->tupleNum = totalTupleNum;
 
     /*
      * Execute the Scan query on GPU.
@@ -345,7 +345,7 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
             case GPU_VAR:
                 {
                     struct gpuVar * var = (struct gpuVar*)expr;
-                    sn.outputIndex[i] = node->plan.table.indexIndirect[var->index];
+                    sn.outputIndex[i] = table->indexIndirect[var->index];
                     break;
                 }
 
@@ -357,16 +357,17 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
 
     tnRes = tableScan(&sn,&context,&pp);
 
+    node->plan.tupleNum = tnRes->tupleNum;
+
     for(i = 0; i<node->plan.attrNum;i++){
-        table->gpuCol[i] = tnRes->content[i];
+        node->plan.gpuCol[i] = tnRes->content[i];
     }
 
     /*
-     * Release the unused OpenCL memory
+     * FIXME: Release the unused OpenCL memory
      */ 
 
     return res;
-
 }
 
 static int gpuExecuteJoin(struct gpuJoinNode * node, QueryDesc * querydesc){
@@ -374,23 +375,101 @@ static int gpuExecuteJoin(struct gpuJoinNode * node, QueryDesc * querydesc){
 
     int i = 0, j = 0, k = 0;
     int nattr = node->plan.attrNum;
-    int attrLen = 0, attrIndex = 0;
-    long tupleNum = 0, totalTupleNum = 0;
-    int index, offset = 0, tupleSize = 0;
-    struct gpuTable * table = &(node->plan.table);
-    int blockNum;
-
-    HeapTupleData tupledata;
-    ItemId lpp;
-    Buffer buffer;
-    Page page;
-    PageHeader ph;
 
     struct clContext * context = querydesc->context;
     cl_int error = 0;
     void * clTmp;
 
-    tupleSize = table->tupleSize;
+    struct joinNode jnode;
+    struct tableNode lnode, rnode, *joinRes;
+    struct statistic pp;
+    pp.total = pp.kernel = pp.pcie = 0;
+
+    /*
+     * Initialize two input table nodes.
+     */ 
+
+    lnode.totalAttr = node->plan.leftPlan->attrNum;
+    lnode.attrType = (int*)palloc(sizeof(int)*lnode.totalAttr);
+    lnode.attrSize = (int*)palloc(sizeof(int)*lnode.totalAttr);
+    lnode.attrIndex = (int*)palloc(sizeof(int)*lnode.totalAttr);
+    lnode.attrTotalSize = (int*)palloc(sizeof(int)*lnode.totalAttr);
+    lnode.dataPos = (int*)palloc(sizeof(int)*lnode.totalAttr);
+    lnode.dataFormat = (int*)palloc(sizeof(int)*lnode.totalAttr);
+    lnode.content = (char**)palloc(sizeof(char*)*lnode.totalAttr);
+
+    for(i=0;i<lnode.totalAttr;i++){
+        lnode.attrType[i] = node->plan.leftPlan->attrType[i];
+        lnode.attrSize[i] = node->plan.leftPlan->attrSize[i];
+        lnode.attrTotalSize[i] = lnode.attrSize[i] * node->plan.leftPlan->tupleNum;
+        lnode.dataPos[i] = GPU;
+        lnode.dataFormat[i] = UNCOMPRESSED;
+        lnode.content[i] = node->plan.leftPlan->gpuCol[i];
+    }
+
+    rnode.totalAttr = node->plan.rightPlan->attrNum;
+    rnode.attrType = (int*)palloc(sizeof(int)*rnode.totalAttr);
+    rnode.attrSize = (int*)palloc(sizeof(int)*rnode.totalAttr);
+    rnode.attrIndex = (int*)palloc(sizeof(int)*rnode.totalAttr);
+    rnode.attrTotalSize = (int*)palloc(sizeof(int)*rnode.totalAttr);
+    rnode.dataPos = (int*)palloc(sizeof(int)*rnode.totalAttr);
+    rnode.dataFormat = (int*)palloc(sizeof(int)*rnode.totalAttr);
+    rnode.content = (char**)palloc(sizeof(char*)*rnode.totalAttr);
+
+    for(i=0;i<rnode.totalAttr;i++){
+        rnode.attrType[i] = node->plan.rightPlan->attrType[i];
+        rnode.attrSize[i] = node->plan.rightPlan->attrSize[i];
+        rnode.attrTotalSize[i] = rnode.attrSize[i] * node->plan.rightPlan->tupleNum;
+        rnode.dataPos[i] = GPU;
+        rnode.dataFormat[i] = UNCOMPRESSED;
+        rnode.content[i] = node->plan.rightPlan->gpuCol[i];
+    }
+
+    /*
+     * Initialize join node.
+     */ 
+
+    jnode.leftTable = &lnode;
+    jnode.rightTable = &rnode;
+
+    jnode.totalAttr = node->plan.attrNum;
+    jnode.tupleSize = node->plan.tupleSize;
+    jnode.keepInGpu = (int *)palloc(sizeof(int) * jnode.totalAttr);
+    for(i=0;i<jnode.totalAttr;i++)
+        jnode.keepInGpu[i] = 1;
+
+    jnode.rightOutputAttrNum = node->rightAttrNum;
+    jnode.leftOutputAttrNum = node->leftAttrNum;
+
+    jnode.leftOutputAttrType = (int*)palloc(sizeof(int)*jnode.leftOutputAttrNum);
+    jnode.leftOutputIndex = (int*)palloc(sizeof(int)*jnode.leftOutputAttrNum);
+    jnode.leftPos = (int*)palloc(sizeof(int)*jnode.leftOutputAttrNum);
+    jnode.rightOutputAttrType = (int*)palloc(sizeof(int)*jnode.rightOutputAttrNum);
+    jnode.rightOutputIndex = (int*)palloc(sizeof(int)*jnode.rightOutputAttrNum);
+    jnode.rightPos = (int*)palloc(sizeof(int)*jnode.rightOutputAttrNum);
+
+    for(i=0;i<jnode.leftOutputAttrNum;i++){
+        jnode.leftOutputAttrType[i] = node->plan.leftPlan->attrType[node->leftAttrIndex[i]];
+        jnode.leftOutputIndex[i] = node->leftAttrIndex[i];
+        jnode.leftPos[i] = node->leftPos[i];
+    }
+
+    for(i=0;i<jnode.rightOutputAttrNum;i++){
+        jnode.rightOutputAttrType[i] = node->plan.rightPlan->attrType[node->rightAttrIndex[i]];
+        jnode.rightOutputIndex[i] = node->rightAttrIndex[i];
+        jnode.rightPos[i] = node->rightPos[i];
+    }
+
+    /*
+     * FIXME: we only support foreign key join.
+     */
+
+    jnode.leftKeyIndex = node->leftJoinIndex;
+    jnode.rightKeyIndex = node->rightJoinIndex;
+
+    joinRes = hashJoin(&jnode, context, &pp);
+
+    node->plan.tupleNum = joinRes->tupleNum;
 
     /*
      * Release the unused OpenCL memory

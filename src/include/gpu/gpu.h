@@ -92,11 +92,11 @@ struct gpuAggExpr{
     struct gpuExpr *aggexpr;       /* aggregation expression */
 };
 
-
 /*
  * Simplified snapshot data on GPU.
  * We only consider satisfyMVCC on GPU. This may not be needed (we can do MVCC on CPU side).
  */
+
 struct gpuSnapshot{
     int xmin;
     int xmax;
@@ -107,26 +107,29 @@ struct gpuSnapshot{
 
 /*
  * The Query plan on GPU.
- * TBD: add where condition.
  */
 
 struct gpuPlan{
     int type;                               /* the type of the current node */
 
     int attrNum;                            /* the total number of projected attrs */
+    int tupleNum;                           /* number of tuples */
     int *attrSize;                          /* size of each projected attrs */
     int *attrType;                          /* type of each projected attrs */
+    int tupleSize;
+
+    cl_mem * gpuCol;                        /* GPU memory to store the projected results */
 
     struct gpuExpr **  targetlist;          /* all the projected results */
     int whereNum;                           /* length of where expression list */
     struct gpuExpr **whereexpr;             /* for where conditions */
     struct gpuPlan *leftPlan;               /* Point to the child plan or the left child plan */
     struct gpuPlan *rightPlan;              /* Point to the right child plan */
-    struct gpuTable table;                  /* Point to the input table of the current node */
 };
 
 struct gpuScanNode{
     struct gpuPlan plan;            /* points to the query plan */
+    struct gpuTable table;          /* Point to the input table of the current node */
     int tid;                        /* relation id to find the table data */
     long blockNum;                  /* Number of blocks in the table */
     int scanPos;                    /* starting page of the scan */
@@ -135,6 +138,17 @@ struct gpuScanNode{
 struct gpuJoinNode{
     struct gpuPlan plan;            /* points to the query plan */
     int joinNum;                    /* number of join expressions */
+
+    int leftAttrNum;                /* needed attributes from left plan */
+    int *leftAttrIndex;             /* the index of the needed attr in the left child */
+    int *leftPos;                   /* the position of the needed attr in the projested list */
+    int leftJoinIndex;              
+
+    int rightAttrNum;               /* needed attributed from right plan */
+    int *rightAttrIndex;            /* the index of the needed attr in the right child */
+    int *rightPos;                  /* the position of the needed attr in the projected list */
+    int rightJoinIndex;
+
     struct gpuExpr **joinexpr;      /* join expression */
 };
 

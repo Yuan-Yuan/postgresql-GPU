@@ -34,6 +34,9 @@ Some notes on current implementation (will be updated based on the process):
     subquery, having clause, limit clause, common table expression,
     NULL attrs, toasted tuples
 
+    for join and scan, currently we don't support expression in the output list.
+    we only support foreign-key join
+
 9. supported type:
     fixed length data:
         int4

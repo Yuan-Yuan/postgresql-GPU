@@ -489,16 +489,16 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
 
     RelationClose(r);
 
-    scannode->plan.table.attrNum = get_relnatts(scannode->tid);
-    scannode->plan.table.attrType = (int*)palloc(sizeof(int)*scannode->plan.table.attrNum);
-    scannode->plan.table.attrSize = (int*)palloc(sizeof(int)*scannode->plan.table.attrNum);
-    scannode->plan.table.variLen = (int*)palloc(sizeof(int)*scannode->plan.table.attrNum);
-    scannode->plan.table.indexIndirect = (int*)palloc(sizeof(int)*scannode->plan.table.attrNum);
-    attrArray = (int *)palloc(sizeof(int)*scannode->plan.table.attrNum);
+    scannode->table.attrNum = get_relnatts(scannode->tid);
+    scannode->table.attrType = (int*)palloc(sizeof(int)*scannode->table.attrNum);
+    scannode->table.attrSize = (int*)palloc(sizeof(int)*scannode->table.attrNum);
+    scannode->table.variLen = (int*)palloc(sizeof(int)*scannode->table.attrNum);
+    scannode->table.indexIndirect = (int*)palloc(sizeof(int)*scannode->table.attrNum);
+    attrArray = (int *)palloc(sizeof(int)*scannode->table.attrNum);
 
     /* The postgresql attrNum starts from 1 */
 
-    for(i=1;i<=scannode->plan.table.attrNum;i++){
+    for(i=1;i<=scannode->table.attrNum;i++){
         typid = get_atttype(scannode->tid,i);
         typmod = get_atttypmod(scannode->tid,i);
 
@@ -507,18 +507,18 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
             case BPCHAROID:
                 attrlen = type_maximum_size(typid,typmod) - VARHDRSZ;
                 attrlen /= pg_encoding_max_length(GetDatabaseEncoding());
-                scannode->plan.table.variLen[i-1] = 0;
+                scannode->table.variLen[i-1] = 0;
                 break;
 
             case VARCHAROID:
                 attrlen = type_maximum_size(typid,typmod) - VARHDRSZ;
                 attrlen /= pg_encoding_max_length(GetDatabaseEncoding());
-                scannode->plan.table.variLen[i-1] = 1;
+                scannode->table.variLen[i-1] = 1;
                 break;
 
             case NUMERICOID:
                 attrlen = sizeof(double); 
-                scannode->plan.table.variLen[i-1] = 1;
+                scannode->table.variLen[i-1] = 1;
                 break;
 
             case TIMESTAMPOID:
@@ -528,7 +528,7 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
             case FLOAT4OID:
             case FLOAT8OID:
                 attrlen = get_typlen(typid);
-                scannode->plan.table.variLen[i-1] = 0;
+                scannode->table.variLen[i-1] = 0;
                 break;
 
             default:
@@ -538,13 +538,13 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
         }
 
         tupleSize += attrlen;
-        scannode->plan.table.attrSize[i-1] = attrlen; 
-        scannode->plan.table.attrType[i-1] = pgtypeToGPUType(typid);
+        scannode->table.attrSize[i-1] = attrlen; 
+        scannode->table.attrType[i-1] = pgtypeToGPUType(typid);
         attrArray[i-1] = -1;
-        scannode->plan.table.indexIndirect[i-1] = -1;
+        scannode->table.indexIndirect[i-1] = -1;
     }
 
-    scannode->plan.table.tupleSize = tupleSize;
+    scannode->table.tupleSize = tupleSize;
 
     assert(pi != NULL);
 
@@ -564,7 +564,10 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
         i ++ ;
     }
 
-    scannode->plan.attrNum = i + pi->pi_numSimpleVars; 
+    scannode->plan.attrNum = i + pi->pi_numSimpleVars;
+
+    scannode->plan.attrType = (int*)palloc(sizeof(int) * scannode->plan.attrNum);
+    scannode->plan.attrSize = (int*)palloc(sizeof(int) * scannode->plan.attrNum);
 
     targetlist = (struct gpuExpr **) palloc(sizeof(struct gpuExpr *) * scannode->plan.attrNum);
 
@@ -581,7 +584,8 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
         }
 
         targetlist[te->resno - 1] = gpuExprInit(te->expr,attrArray);
-
+        scannode->plan.attrType[te->resno-1] = GPU_DOUBLE;
+        scannode->plan.attrSize[te->resno-1] = sizeof(double);
     }
 
     for(i = 0;i<pi->pi_numSimpleVars;i++){
@@ -597,6 +601,10 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
         gvar->expr.type = GPU_VAR;
 
         targetlist[offset] = (struct gpuExpr *) gvar;
+
+        scannode->plan.attrType[offset] = scannode->table.attrType[gvar->index];
+        scannode->plan.attrSize[offset] = scannode->table.attrSize[gvar->index];
+
         attrArray[gvar->index] = 1;
     }
 
@@ -611,22 +619,22 @@ static struct gpuScanNode* gpuInitScan(PlanState *planstate){
         scannode->plan.whereexpr = NULL;
     }
 
-    for(i=0, usedAttr = 0;i<scannode->plan.table.attrNum;i++){
+    for(i=0, usedAttr = 0;i<scannode->table.attrNum;i++){
         if(attrArray[i]!= -1)
             usedAttr ++;
     }
 
-    scannode->plan.table.usedAttr = usedAttr;
-    scannode->plan.table.attrIndex = (int *)palloc(sizeof(int)*usedAttr);
-    for(i=0, k = 0; i < scannode->plan.table.attrNum; i++){
+    scannode->table.usedAttr = usedAttr;
+    scannode->table.attrIndex = (int *)palloc(sizeof(int)*usedAttr);
+    for(i=0, k = 0; i < scannode->table.attrNum; i++){
         if(attrArray[i] != -1){
-            scannode->plan.table.indexIndirect[i] = k;
-            scannode->plan.table.attrIndex[k++] = i; 
+            scannode->table.indexIndirect[i] = k;
+            scannode->table.attrIndex[k++] = i; 
         }
     }
 
-    scannode->plan.table.cpuCol = (char*)palloc(sizeof(char*)*usedAttr);
-    scannode->plan.table.gpuCol = (cl_mem*)palloc(sizeof(cl_mem)*usedAttr);
+    scannode->table.cpuCol = (char*)palloc(sizeof(char*)*usedAttr);
+    scannode->plan.gpuCol = (cl_mem*)palloc(sizeof(cl_mem)*scannode->plan.attrNum);
 
     return scannode;
 }
@@ -644,6 +652,7 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate, int *nodeNum){
 
     ProjectionInfo *pi = joinstate->ps.ps_ProjInfo;
     struct gpuExpr **targetlist = NULL;
+    int * attrArray;
 
     List * wherequal = joinstate->ps.plan->qual;
     List * joinqual = joinstate->joinqual;
@@ -651,6 +660,8 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate, int *nodeNum){
 
     int i,k;
     int leftAttrNum, rightAttrNum;
+    int leftNeeded = 0, rightNeeded = 0;
+    int leftIndex = 0, rightIndex = 0;
 
     *nodeNum = *nodeNum + 1;
     joinnode = (struct gpuJoinNode*)palloc(sizeof(struct gpuJoinNode));
@@ -691,8 +702,10 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate, int *nodeNum){
              * varNumbers start from 1, not 0.
              */
 
-            if(pi->pi_varNumbers[i] <= leftAttrNum)
+            if(pi->pi_varNumbers[i] <= leftAttrNum){
                 k++;
+                leftNeeded ++;
+            }
 
         }else{
 
@@ -701,19 +714,28 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate, int *nodeNum){
              * varNumbers start from 1, not 0.
              */ 
 
-            if(pi->pi_varNumbers[i] <= rightAttrNum)
+            if(pi->pi_varNumbers[i] <= rightAttrNum){
                 k++;
+                rightNeeded ++ ;
+            }
         }
     }
 
     joinnode->plan.attrNum = k;
+    joinnode->leftAttrNum = leftNeeded;
+    joinnode->rightAttrNum = rightNeeded;
+
+    joinnode->leftPos = (int*)palloc(sizeof(int)*leftNeeded);
+    joinnode->leftAttrIndex = (int*)palloc(sizeof(int)*leftNeeded);
+    joinnode->rightPos = (int*)palloc(sizeof(int)*rightNeeded);
+    joinnode->rightAttrIndex = (int*)palloc(sizeof(int)*rightNeeded);
 
     joinnode->plan.attrType = (int*)palloc(sizeof(int)*k);
     joinnode->plan.attrSize = (int*)palloc(sizeof(int)*k);
+    attrArray = (int*)palloc(sizeof(int)*k);
 
     /*
      * Initialize the target list.
-     * FIXME: initialize type and size.
      */
 
     targetlist = (struct gpuExpr **) palloc(sizeof(struct gpuExpr*)*k);
@@ -729,10 +751,17 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate, int *nodeNum){
             continue;
         }
 
+        /*
+         * FIXME: currently we don't support expression for join, will be supported later.
+         */
+
         targetlist[te->resno-1] = gpuExprInit(te->expr, NULL);
+        joinnode->plan.attrType[te->resno-1] = GPU_DOUBLE;
+        joinnode->plan.attrSize[te->resno-1] = sizeof(double);
+        tupleSize += joinnode->plan.attrSize[te->resno-1];
     }
 
-    for(i = 0;i<pi->pi_numSimpleVars;i++){
+    for(i = 0, leftIndex = 0, rightIndex = 0; i<pi->pi_numSimpleVars; i++){
         int offset = pi->pi_varOutputCols[i] - 1;
 
         if(pi->pi_varSlotOffsets[i] == offsetof(ExprContext,ecxt_innertuple)){
@@ -745,6 +774,12 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate, int *nodeNum){
             gvar->expr.type = GPU_VAR;
             gvar->index = pi->pi_varNumbers[i] - 1;
             targetlist[offset] = (struct gpuExpr *) gvar;
+            joinnode->plan.attrType[offset] = joinnode->plan.leftPlan->attrType[gvar->index];
+            joinnode->plan.attrSize[offset] = joinnode->plan.leftPlan->attrSize[gvar->index];
+
+            joinnode->leftAttrIndex[leftIndex] = gvar->index;
+            joinnode->leftPos[leftIndex] = offset;
+            leftIndex ++;
 
         }else{
 
@@ -755,14 +790,25 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate, int *nodeNum){
             struct gpuVar *gvar = (struct gpuVar*)palloc(sizeof(struct gpuVar));
             gvar->expr.type = GPU_VAR;
             gvar->index = pi->pi_varNumbers[i] - 1;
+
+            joinnode->plan.attrType[offset] = joinnode->plan.rightPlan->attrType[gvar->index];
+            joinnode->plan.attrSize[offset] = joinnode->plan.rightPlan->attrSize[gvar->index];
+
+            joinnode->rightAttrIndex[rightIndex] = gvar->index;
+            joinnode->rightPos[rightIndex] = offset;
+            rightIndex ++;
+
             gvar->index = - gvar->index;
             targetlist[offset] = (struct gpuExpr *) gvar;
 
         }
 
+        tupleSize += joinnode->plan.attrSize[offset];
+
     }
 
     joinnode->plan.targetlist = targetlist;
+    joinnode->plan.tupleSize = tupleSize;
 
     if(wherequal){
         joinnode->plan.whereNum = list_length(wherequal);
