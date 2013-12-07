@@ -340,7 +340,7 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
     tn->attrTotalSize = (int *)palloc(sizeof(int) * tn->totalAttr);
     tn->dataPos = (int *)palloc(sizeof(int) * tn->totalAttr);
     tn->dataFormat = (int *)palloc(sizeof(int) * tn->totalAttr);
-    tn->content = (char **)palloc(sizeof(int) * tn->totalAttr);
+    tn->content = (char **)palloc(sizeof(char*) * tn->totalAttr);
     tn->tupleSize = 0;
 
     for(i = 0; i<tn->totalAttr;i++){
@@ -352,7 +352,7 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
 
         tn->dataPos[i] = MEM;
         tn->dataFormat[i] = UNCOMPRESSED;
-        tn->content[i] = (char *) table->cpuCol[index];
+        tn->content[i] = (char *) table->cpuCol[i];
         tn->tupleSize += tn->attrSize[index];
     }
 
