@@ -32,6 +32,7 @@ enum {
 /* data type supported in schema */
     INT,
     FLOAT,
+    DOUBLE,
     STRING,
 
 /* supported relation in exp */

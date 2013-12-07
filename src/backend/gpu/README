@@ -17,6 +17,8 @@ Some notes on current implementation (will be updated based on the process):
     OpenCL driver implementation (Intel and AMD in pinned host memory, Nvidia in GPU device memory).
     3) when to release
     all the opencl allocated memory will be released when query ends(ExecutorEnd())
+    each node will try to release its child's allocated opencl memory after its execution.
+
 6. We first assume that the output of a query only consists of simple attributes. Complex expressions will be supported later.
     the following postgresql expression type is supported:
         1) T_OpExpr, such as, id+1, where id is the name of a column.
@@ -46,6 +48,12 @@ Some notes on current implementation (will be updated based on the process):
    variable length data: 
         varchar
         numeric : numeric data is stored in Numeric format.
+
+10. opencl compilation.
+    current we manually copy the needed kernel header to the include dir. We will change later.
+
+11. integrate GPUDB.
+    1) gpudb's type and optype(eq,leq...) need to be adjusted.
 
 There may be duplicated codes in the current implementation. we will keep refining the codes all the time.
 

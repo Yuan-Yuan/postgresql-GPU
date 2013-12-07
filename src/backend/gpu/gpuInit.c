@@ -14,6 +14,7 @@
 #include "storage/bufmgr.h"
 #include "mb/pg_wchar.h"
 #include "gpu/gpu.h"
+#include "gpu/common.h"
 
 
 static struct gpuExpr* gpuExprInit(Expr *, int *);
@@ -115,6 +116,7 @@ static void deviceInit(struct clContext * context){
 }
 /*
  * Convert postgresql type to supported gpu type.
+ * The types are defined in gpudb.
  */
 
 static int pgtypeToGPUType(int typid){
@@ -124,25 +126,25 @@ static int pgtypeToGPUType(int typid){
     switch(typid){
 
         case INT4OID:
-            gputype = GPU_INT;
+            gputype = INT;
             break;
 
         case FLOAT4OID:
-            gputype = GPU_FLOAT;
+            gputype = FLOAT;
             break;
 
         case FLOAT8OID:
-            gputype = GPU_DOUBLE;
+            gputype = DOUBLE;
             break;
 
         case NUMERICOID:
-            gputype = GPU_DOUBLE;
+            gputype = DOUBLE;
             break;
 
         case TEXTOID:
         case BPCHAROID:
         case VARCHAROID:
-            gputype = GPU_STRING;
+            gputype = STRING;
             break;
 
         case TIMESTAMPOID:
@@ -212,11 +214,11 @@ static void gpuInitOpExpr(struct gpuOpExpr * gpuopexpr, OpExpr *opexpr, int * at
     assert(list_length(opexpr->args)== 2);
 
     if(strcmp(opname, "=") == 0){
-        gpuopexpr->expr.type = GPU_GT;
+        gpuopexpr->expr.type = GPU_EQ;
     }else if (strcmp(opname,">=")){
         gpuopexpr->expr.type = GPU_GEQ;
     }else if (strcmp(opname,">")){
-        gpuopexpr->expr.type = GPU_EQ;
+        gpuopexpr->expr.type = GPU_GT;
     }else if (strcmp(opname,"<=")){
         gpuopexpr->expr.type = GPU_LEQ;
     }else if (strcmp(opname,"<")){
@@ -828,6 +830,15 @@ static struct gpuJoinNode* gpuInitJoin(PlanState *planstate, int *nodeNum){
             ExprState * es = (ExprState*)lfirst(l);
             joinnode->joinexpr = gpuWhere(es->expr, NULL);
         }
+        assert(joinnode->joinexpr[0]->type == GPU_EQ);
+
+        struct gpuOpExpr * opexpr = (struct gpuOpExpr*)(joinnode->joinexpr[0]);
+
+        struct gpuVar * var = (struct gpuVar*)(opexpr->left);
+        joinnode->leftJoinIndex = var->index;
+
+        var = (struct gpuVar*)(opexpr->right);
+        joinnode->rightJoinIndex = var->index;
 
     }else{
         joinnode->joinNum = 0;

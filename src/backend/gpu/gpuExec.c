@@ -91,20 +91,72 @@ static void setupGpuWhere(int * index, struct scanNode *sn, struct gpuExpr * exp
          */ 
 
         case GPU_GT:
-            sn->filter->exp[*index].relation = GTH;
-        case GPU_GEQ:
-            sn->filter->exp[*index].relation = GEQ;
-        case GPU_EQ:
-            sn->filter->exp[*index].relation = EQ;
-        case GPU_LEQ:
-            sn->filter->exp[*index].relation = LEQ;
-        case GPU_LT:
-            sn->filter->exp[*index].relation = LTH;
             {
+                sn->filter->exp[*index].relation = GTH;
                 struct gpuOpExpr * opexpr = (struct gpuOpExpr*)expr;
                 struct gpuVar * var = (struct gpuVar*)opexpr->left;
                 struct gpuConst * gpuconst = (struct gpuConst*)opexpr->right;
-                sn->whereIndex[*index] = var->index;
+                for(i=0;i<sn->whereAttrNum;i++){
+                    if(var->index == sn->tn->attrIndex[sn->whereIndex[i]])
+                        break;
+                }
+                sn->filter->exp[*index].index = i;
+                memcpy(sn->filter->exp[*index].content, gpuconst->value, gpuconst->length);
+                break;
+            }
+        case GPU_GEQ:
+            {
+                sn->filter->exp[*index].relation = GEQ;
+                struct gpuOpExpr * opexpr = (struct gpuOpExpr*)expr;
+                struct gpuVar * var = (struct gpuVar*)opexpr->left;
+                struct gpuConst * gpuconst = (struct gpuConst*)opexpr->right;
+                for(i=0;i<sn->whereAttrNum;i++){
+                    if(var->index == sn->tn->attrIndex[sn->whereIndex[i]])
+                        break;
+                }
+                sn->filter->exp[*index].index = i; 
+                memcpy(sn->filter->exp[*index].content, gpuconst->value, gpuconst->length);
+                break;
+            }
+        case GPU_EQ:
+            {
+                sn->filter->exp[*index].relation = EQ;
+                struct gpuOpExpr * opexpr = (struct gpuOpExpr*)expr;
+                struct gpuVar * var = (struct gpuVar*)opexpr->left;
+                struct gpuConst * gpuconst = (struct gpuConst*)opexpr->right;
+                for(i=0;i<sn->whereAttrNum;i++){
+                    if(var->index == sn->tn->attrIndex[sn->whereIndex[i]])
+                        break;
+                }
+                sn->filter->exp[*index].index = i; 
+                memcpy(sn->filter->exp[*index].content, gpuconst->value, gpuconst->length);
+                break;
+            }
+        case GPU_LEQ:
+            {
+                sn->filter->exp[*index].relation = LEQ;
+                struct gpuOpExpr * opexpr = (struct gpuOpExpr*)expr;
+                struct gpuVar * var = (struct gpuVar*)opexpr->left;
+                struct gpuConst * gpuconst = (struct gpuConst*)opexpr->right;
+                for(i=0;i<sn->whereAttrNum;i++){
+                    if(var->index == sn->tn->attrIndex[sn->whereIndex[i]])
+                        break;
+                }
+                sn->filter->exp[*index].index = i; 
+                memcpy(sn->filter->exp[*index].content, gpuconst->value, gpuconst->length);
+                break;
+            }
+        case GPU_LT:
+            {
+                sn->filter->exp[*index].relation = LTH;
+                struct gpuOpExpr * opexpr = (struct gpuOpExpr*)expr;
+                struct gpuVar * var = (struct gpuVar*)opexpr->left;
+                struct gpuConst * gpuconst = (struct gpuConst*)opexpr->right;
+                for(i=0;i<sn->whereAttrNum;i++){
+                    if(var->index == sn->tn->attrIndex[sn->whereIndex[i]])
+                        break;
+                }
+                sn->filter->exp[*index].index = i; 
                 memcpy(sn->filter->exp[*index].content, gpuconst->value, gpuconst->length);
                 break;
             }
@@ -189,8 +241,8 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
      *  3) optimize MVCC check and serialization check conditions.
      */
 
-    for(i=node->scanPos, totalTupleNum = 0; i<blockNum; i++){
-        buffer = ReadBuffer(r,i);
+    for(i=0, totalTupleNum = 0; i<blockNum; i++){
+        buffer = ReadBuffer(r,i + node->scanPos);
         LockBuffer(buffer, BUFFER_LOCK_SHARE);
         page = BufferGetPage(buffer);
 
@@ -265,6 +317,8 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
 
     table->tupleNum = totalTupleNum;
 
+    node->scanPos += blockNum;
+
     /*
      * Execute the Scan query on GPU.
      * Initialize the data structure and call the gpudb primitives.
@@ -284,20 +338,21 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
     tn->dataPos = (int *)palloc(sizeof(int) * tn->totalAttr);
     tn->dataFormat = (int *)palloc(sizeof(int) * tn->totalAttr);
     tn->content = (char **)palloc(sizeof(int) * tn->totalAttr);
+    tn->tupleSize = 0;
 
     for(i = 0; i<tn->totalAttr;i++){
         index = table->attrIndex[i];
         tn->attrSize[i] = table->attrSize[index];
         tn->attrType[i] = table->attrType[index];
         tn->attrIndex[i] = index;
-        tn->attrTotalSize[i] = totalTupleNum * tn->attrSize[index];
+        tn->attrTotalSize[i] = totalTupleNum * table->attrSize[index];
 
         tn->dataPos[i] = MEM;
         tn->dataFormat[i] = UNCOMPRESSED;
-        tn->content[i] = (char *) table->cpuCol[i];
+        tn->content[i] = (char *) table->cpuCol[index];
+        tn->tupleSize += tn->attrSize[index];
     }
 
-    tn->tupleSize = table->tupleSize;
     tn->tupleNum = totalTupleNum;
     
     struct scanNode sn;
@@ -329,6 +384,16 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
 
         sn.whereIndex = (int*)palloc(sizeof(int) * attrCount);
 
+        for(i=0, index=0;i<table->attrNum;i++){
+            if(attr[i] !=0){
+                int j;
+                for(j=0;j<tn->totalAttr;j++){
+                    if(tn->attrIndex[j] == i)
+                        sn.whereIndex[index++] = j;
+                }
+            }
+        }
+
         sn.filter = (struct whereCondition*)palloc(sizeof(struct whereCondition));
         sn.filter->nested = 0;
         sn.filter->expNum = exprCount;
@@ -355,7 +420,22 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
         }
     }
 
-    tnRes = tableScan(&sn,&context,&pp);
+    if(node->plan.whereNum != 0){
+        tnRes = tableScan(&sn,context,&pp);
+
+    }else{
+        tnRes = (struct tableNode*)palloc(sizeof(struct tableNode));
+        tnRes->tupleNum = tn->tupleNum;
+        tnRes->content = (char **)palloc(sizeof(char*)*node->plan.attrNum);
+        for(i=0;i<node->plan.attrNum;i++){
+            index = sn.outputIndex[i];
+            tnRes->content[i] = (char*) clCreateBuffer(context->context,CL_MEM_READ_WRITE, tn->attrTotalSize[index],NULL,&error);
+            if(error != CL_SUCCESS){
+                printf("Failed to allocate gpu memory\n");
+            }
+            clEnqueueWriteBuffer(context->queue,tn->content[index],CL_TRUE,0, tn->attrTotalSize[index], (cl_mem)tnRes->content[i], 0,0,0);
+        }
+    }
 
     node->plan.tupleNum = tnRes->tupleNum;
 
@@ -363,12 +443,12 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
         node->plan.gpuCol[i] = tnRes->content[i];
     }
 
-    /*
-     * FIXME: Release the unused OpenCL memory
-     */ 
-
     return res;
 }
+
+/*
+ * Executing the join query.
+ */
 
 static int gpuExecuteJoin(struct gpuJoinNode * node, QueryDesc * querydesc){
     int res = 1;
@@ -384,6 +464,15 @@ static int gpuExecuteJoin(struct gpuJoinNode * node, QueryDesc * querydesc){
     struct tableNode lnode, rnode, *joinRes;
     struct statistic pp;
     pp.total = pp.kernel = pp.pcie = 0;
+
+    /*
+     * If any one of the children don't have any tuple, return immedialately.
+     */
+
+    if(node->plan.leftPlan->tupleNum == 0 || node->plan.rightPlan->tupleNum == 0){
+        node->plan.tupleNum = 0;
+        return 1;
+    }
 
     /*
      * Initialize two input table nodes.
@@ -610,10 +699,10 @@ void gpuExec(QueryDesc * querydesc){
          * This process continues until all the operators finish.
          */ 
 
-        finish = 1;
 
         while(1){
 
+            finish = 1;
             for(i=start;i<k;i++){
                 res = gpuExecutePlan(execQueue[i], querydesc);
                 finish &= res;
