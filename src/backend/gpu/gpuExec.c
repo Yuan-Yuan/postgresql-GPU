@@ -180,7 +180,7 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
 
     int i = 0, j = 0, k = 0;
     int relid = node->tid;
-    int nattr = node->plan.attrNum;
+    int nattr = node->table.attrNum;
     int attrLen = 0, attrIndex = 0;
     long tupleNum = 0, totalTupleNum = 0;
     int index, offset = 0, tupleSize = 0;
@@ -271,6 +271,9 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
 
                     for(j = 0; j < nattr; j ++){
                         char * tp = (char*)tupledata.t_data + offset;
+
+                        if(attrIndex >= table->usedAttr)
+                            break;
 
                         if(j == table->attrIndex[attrIndex]){
 
