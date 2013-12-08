@@ -327,8 +327,8 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
      * Initialize the data structure and call the gpudb primitives.
      */
 
-    struct tableNode * tnRes = (struct tableNode *)palloc(sizeof(struct tableNode));
-    struct tableNode * tn = (struct tableNode *)palloc(sizeof(struct tableNode));
+    struct tableNode * tnRes;
+    struct tableNode * tn = (struct tableNode *)malloc(sizeof(struct tableNode));
     struct statistic pp;
     pp.total = pp.kernel = pp.pcie = 0;
 
@@ -353,7 +353,7 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
         tn->dataPos[i] = MEM;
         tn->dataFormat[i] = UNCOMPRESSED;
         tn->content[i] = (char *) table->cpuCol[i];
-        tn->tupleSize += tn->attrSize[index];
+        tn->tupleSize += table->attrSize[index];
     }
 
     tn->tupleNum = totalTupleNum;
@@ -423,20 +423,23 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
         }
     }
 
+
     if(node->plan.whereNum != 0){
         tnRes = tableScan(&sn,context,&pp);
 
     }else{
+
         tnRes = (struct tableNode*)palloc(sizeof(struct tableNode));
         tnRes->tupleNum = tn->tupleNum;
         tnRes->content = (char **)palloc(sizeof(char*)*node->plan.attrNum);
+
         for(i=0;i<node->plan.attrNum;i++){
             index = sn.outputIndex[i];
             tnRes->content[i] = (char*) clCreateBuffer(context->context,CL_MEM_READ_WRITE, tn->attrTotalSize[index],NULL,&error);
             if(error != CL_SUCCESS){
                 printf("Failed to allocate gpu memory\n");
             }
-            clEnqueueWriteBuffer(context->queue,tn->content[index],CL_TRUE,0, tn->attrTotalSize[index], (cl_mem)tnRes->content[i], 0,0,0);
+            clEnqueueWriteBuffer(context->queue,(cl_mem)tnRes->content[i],CL_TRUE,0, tn->attrTotalSize[index], tn->content[index], 0,0,0);
         }
     }
 
@@ -474,7 +477,7 @@ static int gpuExecuteJoin(struct gpuJoinNode * node, QueryDesc * querydesc){
 
     if(node->plan.leftPlan->tupleNum == 0 || node->plan.rightPlan->tupleNum == 0){
         node->plan.tupleNum = 0;
-        return 1;
+        return res;
     }
 
     /*
