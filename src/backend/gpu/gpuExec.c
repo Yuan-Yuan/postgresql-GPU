@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <assert.h>
+#include <time.h>
 
 #include "postgres.h"
 #include "executor/executor.h"
@@ -228,6 +229,7 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
         table->cpuCol[i] = (char*)palloc(tupleNum * table->attrSize[index]);
     }
 
+
     /*
      * The relation must have been opened with lock already.
      * Here we simply get Relation for the relation id.
@@ -240,6 +242,7 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
      *  2) put MVCC check and serialization check on GPU to accelerate the speed.
      *  3) optimize MVCC check and serialization check conditions.
      */
+
 
     for(i=0, totalTupleNum = 0; i<blockNum; i++){
         buffer = ReadBuffer(r,i + node->scanPos);
@@ -256,8 +259,10 @@ static int gpuExecuteScan(struct gpuScanNode* node, QueryDesc * querydesc){
                     continue;
 
                 tupledata.t_data = (HeapTupleHeader)((char *)ph + lpp->lp_off);
+                bool visible = HeapTupleSatisfiesMVCC(tupledata.t_data, querydesc->snapshot, buffer);
+                CheckForSerializableConflictOut(visible, r, &tupledata, buffer, querydesc->snapshot);
 
-                if(HeapTupleSatisfiesMVCC(tupledata.t_data, querydesc->snapshot, buffer)){
+                if(visible){
 
                     /*
                      * If the tuple passes both check, copy the actual data to OpenCL memory (from row to column).
@@ -679,6 +684,8 @@ static void gpuExecQueue(struct gpuPlan * plan, struct gpuPlan ** queue, int *in
 
 void gpuExec(QueryDesc * querydesc){
 
+    struct timespec startTime, endTime;
+    clock_gettime(CLOCK_REALTIME, &startTime);
     struct clContext * context = querydesc->context;
     struct gpuQueryDesc * gpuquerydesc = context->querydesc;
     struct gpuPlan ** execQueue = NULL;
@@ -729,5 +736,9 @@ void gpuExec(QueryDesc * querydesc){
         gpuExecutePlan(execQueue[k], querydesc);
         start = k + 1;
     }
+
+    clock_gettime(CLOCK_REALTIME, &endTime);
+    double time = (endTime.tv_sec - startTime.tv_sec) * 1e3 + (endTime.tv_nsec - startTime.tv_nsec) * 1e-6;
+    printf("GPU query execution time :%lf\n",time);
 
 }

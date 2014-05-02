@@ -7,7 +7,7 @@
  * Instead of tuple-a-time processing, we process multiple pages for each operator.
  * The Macro BLOCK defines how many pages we process each time for scan operators.
  */
-#define BLOCK   4096
+#define BLOCK   409600
 
 /*
  * GPU table related info.
